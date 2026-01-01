@@ -23,7 +23,7 @@ uartWriteStringZ:
 
 1:  ld   a, (hl)
     and  a
-    jr   z, 2F
+    jp   z, restoreBorder               ; Return via restoreBorder
     push hl
     call uartWriteByte
     pop  hl
@@ -34,11 +34,6 @@ uartWriteStringZ:
 
     inc  hl
     jr   1B
-
-2:  xor  a
-    out  (-2), a
-
-    ret
 
 ; Print zero-terminated string
 ; HL - string pointer

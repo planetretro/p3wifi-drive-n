@@ -140,9 +140,6 @@ okErrErr
 ;
 ; If connection was closed it calls 'closed_callback'
 getPacket
-    xor     a
-    out     (-2), a
-
     call    uartReadBlocking
     cp      '+'
     jr      z, .checkIpdStart
@@ -151,9 +148,6 @@ getPacket
     jr      getPacket
 
 .readPacket
-    ld      a, 5
-    out     (-2), a
-
     call    count_ipd_length
     ld      (bytes_avail), hl
     push    hl

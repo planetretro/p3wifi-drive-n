@@ -1,10 +1,14 @@
-; hl - server
-; de - path
-; bc - port
-; a - page
 loadSector:
+    ld      hl, d_host
+    ld      de, d_path
+    ld      bc, d_port
+
+    push    ix
     call    makeRequest
-    jp      loadData
+    call    loadData
+    pop     ix
+
+    ret
 
 ; HL - domain stringZ
 ; DE - path stringZ

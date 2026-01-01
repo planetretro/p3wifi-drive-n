@@ -1,23 +1,25 @@
         device ZXSPECTRUM128
 
-bank1           equ 0x7ffd
-bankm           equ 0x5B5c
-xdpb_ptrs       equ 0xe2a0              ; This is the same on the +3e, +3 or +2A
-bordcr          equ $5c48
+bank1       equ 0x7ffd
+bankm       equ 0x5B5c
+xdpb_ptrs   equ 0xe2a0              ; This is the same on the +3e, +3 or +2A
+bordcr      equ $5c48
 
     org     0xc000 - (3*1024)
 
 start:
     display $
+    jp      start2
 
-    jp      1F
+    ; Variables that can be peeked / poked from BASIC
 
-    defw   d_host                   ; Addresses so we can poke in IP address
-    defw   d_port                   ; and port of server if needed
+    defw    d_host                  ; Addresses so we can poke in IP address
+    defw    d_port                  ; and port of server if needed
 disk_type:
-    defb   0                        ; Disk type
+    defb    0                       ; Disk type
 
-1:
+start2:
+
     ; Set up the stack and save HL' so we can return to BASIC
 
     di
@@ -33,7 +35,9 @@ disk_type:
     ld   a, (wifiConnected)
     or   a
     jr   nz, 1F
+
 ;        call text_init
+
     call loadWiFiConfig
     call initWiFi
     ld   a, 1                           ; Flag wifi as connected
@@ -61,19 +65,14 @@ disk_type:
 
     ld      ix, xdpb
     ld      a, (disk_type)          ; 0 = Standard +3 format disk
-    ld      hl, .return1
+    ld      hl, exit
     push    hl
     ld      hl, dd_sel_format
     push    hl
     jp      dos_tos
 
-.return1
-    jp      exit                    ; Drive N is now available
-
 login:
-    xor a
-    scf                                 ; Signal success
-    ret
+    jp      cmd_success
 
 ;    B = Page for C000h (49152)...FFFFh (65535)
 ;    C = Unit (0/1)
@@ -82,11 +81,17 @@ login:
 ;   HL = Address of buffer
 ;   IX = Address of XDPB
 read:
-    push ix
-
     ld   a, 5
     ld   (ddl_parms+$06), a             ; Read command
+    call prepFloppyCmd
+    call loadSector
+    jr   nz, cmd_fail
+    jr   cmd_success
 
+write:
+    jr   cmd_fail
+
+prepFloppyCmd:
     push hl
     push de
     push bc
@@ -94,28 +99,19 @@ read:
     pop  bc
     pop  de
     pop  hl
-
     call floppyCmdToString              ; Convert to hex string
 
-    ld   hl, (ddl_parms+1)              ; buffer address for sector read
+    ld   hl, (ddl_parms+1)              ; buffer address for sector read/write
     ld   (data_pointer), hl
+    ret
 
-    ld   hl, d_host
-    ld   de, d_path
-    ld   bc, d_port
-
-    call loadSector
-    jr   nz, 1F
-
+cmd_success:
     call restoreBorder
-    pop  ix                             ; Restore IX
     xor  a
     scf                                 ; Signal success
     ret
 
-1:
-    pop  ix
-write:
+cmd_fail:
     call restoreBorder
     xor  a
     ld   a, 2                           ; Seek fail
@@ -229,9 +225,10 @@ buildFloppyCmd:
 ; Subroutine to setup some of the parameter block for sector read/writes
 ; (except # command bytes & additional command bytes)
 
-l1b9c   ld      (ddl_parms+1),hl        ; store buffer address
-    ld      l,a
-    ld      a,b
+l1b9c
+    ld      (ddl_parms+1),hl        ; store buffer address
+    ld      l,a                     ; Floppy command
+    ld      a,b                     ; Page
     ld      (ddl_parms),a           ; store buffer page
     call    l1bb5                   ; C=physical side & unit byte
     ld      h,c
@@ -244,7 +241,8 @@ l1b9c   ld      (ddl_parms+1),hl        ; store buffer address
 ; Subroutine to return physical side (B) and track (D) given logical track (D)
 ; Physical side is also ORed with unit number in C
 
-l1bb5   ld      a,(ix+$11)
+l1bb5
+    ld      a,(ix+$11)
     and     $7f                     ; A=sidedness
     ld      b,$00                   ; side 0
     ret     z                       ; exit if single-sided (physical=logical)
@@ -260,7 +258,8 @@ l1bb5   ld      a,(ix+$11)
     ld      b,a
     jr      l1bd4                   ; move on to OR into unit number
 
-l1bc8   ld      a,d
+l1bc8
+    ld      a,d
     sub     (ix+$12)                ; subtract # tracks
     jr      c,l1bd4                 ; if < # tracks, physical=logical so move on
     sub     (ix+$12)                ; on successive side, tracks count back down
@@ -268,7 +267,8 @@ l1bc8   ld      a,d
     ld      d,a
     inc     b                       ; and use side 1
 
-l1bd4   ld      a,b                     ; A = side (0 or 1)
+l1bd4
+    ld      a,b                     ; A = side (0 or 1)
     add     a,a                     ; A*= 2
     add     a,a
     or      c                       ; OR in unit number
