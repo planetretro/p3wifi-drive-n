@@ -28,8 +28,6 @@ disk_type:
     exx
     ei
 
-    call saveBorder                 ; Save border colour so we can restore it later
-
     ; Load WiFi config + init ESP
 
     ld   a, (wifiConnected)
@@ -77,61 +75,18 @@ login:
     scf                                 ; Signal success
     ret
 
-; Read a sector.
-;
-; ENTRY CONDITIONS
-;         B = Page for C000h (49152)...FFFFh (65535)
-;         C = Unit (0/1)
-;         D = Logical track, 0 base
-;         E = Logical sector, 0 base
-;         HL = Address of buffer
-;         IX = Address of XDPB
+;    B = Page for C000h (49152)...FFFFh (65535)
+;    C = Unit (0/1)
+;    D = Logical track, 0 base
+;    E = Logical sector, 0 base
+;   HL = Address of buffer
+;   IX = Address of XDPB
 read:
+    push ix
+
     ld   a, 5
     ld   (ddl_parms+$06), a             ; Read command
-    call dd_cmd_setup
 
-    ld   hl, (ddl_parms+1)              ; buffer address for sector read
-    ld   (data_pointer), hl
-
-    push ix
-    call loadSector
-    pop  ix
-
-    jr   nz, cmd_failure
-    jp   cmd_success
-
-; Write a sector.
-;
-; ENTRY CONDITIONS
-;         B = Page for C000h (49152)...FFFFh (65535)
-;         C = Unit (0/1)
-;         D = Logical track, 0 base
-;         E = Logical sector, 0 base
-;         HL = Address of buffer
-;         IX = Address of XDPB
-
-write:
-;     ; TODO
-;     call restoreBorder
-;     xor  a
-;     ld   a, 2                           ; Seek fail
-;     ret
-
-    ld   a, 6
-    ld   (ddl_parms+$06), a             ; Write command
-    call dd_cmd_setup
-
-    ld   (data_pointer), hl
-
-    push ix
-    call writeSector
-    pop  ix
-
-    jr   nz, cmd_failure
-    jp   cmd_success
-
-dd_cmd_setup:
     push hl
     push de
     push bc
@@ -142,21 +97,25 @@ dd_cmd_setup:
 
     call floppyCmdToString              ; Convert to hex string
 
+    ld   hl, (ddl_parms+1)              ; buffer address for sector read
+    ld   (data_pointer), hl
+
     ld   hl, d_host
     ld   de, d_path
     ld   bc, d_port
 
-    ret
+    call loadSector
+    jr   nz, 1F
 
-cmd_success:
     call restoreBorder
     pop  ix                             ; Restore IX
     xor  a
     scf                                 ; Signal success
     ret
 
-cmd_failure:
+1:
     pop  ix
+write:
     call restoreBorder
     xor  a
     ld   a, 2                           ; Seek fail
@@ -174,17 +133,12 @@ exit:
     ei
     ret
 
-saveBorder:
+restoreBorder:
     ld      a, (bordcr)                 ; Restore border colour
     and     $38
     rrca
     rrca
     rrca
-    ld      (border), a
-    ret
-
-restoreBorder:
-    ld      a, (border)
     out     (-2), a
     ret
 
@@ -275,8 +229,7 @@ buildFloppyCmd:
 ; Subroutine to setup some of the parameter block for sector read/writes
 ; (except # command bytes & additional command bytes)
 
-l1b9c
-    ld      (ddl_parms+1),hl        ; store buffer address
+l1b9c   ld      (ddl_parms+1),hl        ; store buffer address
     ld      l,a
     ld      a,b
     ld      (ddl_parms),a           ; store buffer page
@@ -450,9 +403,6 @@ temp_hl:
     defw    0
 
 wifiConnected:
-    defb    0
-
-border:
     defb    0
 
 chksm_a

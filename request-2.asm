@@ -2,7 +2,7 @@
 ; de - path
 ; bc - port
 ; a - page
-loadSector:
+doSector:
     call    makeRequest
     jp      loadData
 
@@ -35,8 +35,19 @@ makeRequest:
     call    uartWriteStringZ
     ld      hl, (path_ptr)
     call    getStringLength
+
     push    bc
     pop     hl
+
+    ; Write sends 512 bytes of sector data
+
+    ld      a, (ddl_parms+0x06)
+    cp      6
+    jr      nz, 1F
+    ld      de, 512
+    add     hl, de
+
+1:
     call    B2D16
 
     ld      hl, B2DBUF
@@ -59,8 +70,46 @@ wPrmt:
     ld      hl, (path_ptr)
     call    uartWriteStringZ
 
+    ; if write, we need to send 512 bytes of sector data here
+
+    ld      a, (ddl_parms+0x06)
+    cp      6                           ; Is it a write command?
+    jr      nz, .skipWriteSector        ; No, skip sending sector data
+
+    ld      hl, (data_pointer)
+    ld      bc, 512
+1:
+    di
+    push    hl
+    push    bc
+    ld      a, (ddl_parms)
+    call    ram_page_in
+
+    ld      a, (hl)
+    call    uartWriteByte
+
+    di                                  ; Need to disable again, as uartWriteByte re-enables interrupts
+    call    ram_page_out
+    pop     bc
+    pop     hl
+
+    inc     hl
+    dec     bc
+
+    ld      a, b
+    or      c
+    jr      nz, 1B
+
+    ei
+
+    ; Skip saving read packet data by setting data_pointer to 0
+    ld   hl, 0
+    ld   (data_pointer), hl
+
+.skipWriteSector
     ld      hl, crlf
     call    uartWriteStringZ
+
     ld      a, 1
     ld      (connectionOpen), a
     xor     a

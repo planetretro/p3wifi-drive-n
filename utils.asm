@@ -22,20 +22,23 @@ uartWriteStringZ:
 ;     ENDIF
 
 1:  ld   a, (hl)
-    or   a
-    jp   z, restoreBorder               ; Return via restoreBorder
-
+    and  a
+    jr   z, 2F
     push hl
     call uartWriteByte
     pop  hl
 
-    ld   a, r                           ; Flash the border
-    and  %00000110
-    or   1                              ; Ensure not black
+    ld   a, r
+    and  7
     out  (-2), a
 
     inc  hl
     jr   1B
+
+2:  xor  a
+    out  (-2), a
+
+    ret
 
 ; Print zero-terminated string
 ; HL - string pointer

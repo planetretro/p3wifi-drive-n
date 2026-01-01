@@ -165,7 +165,7 @@ rxLoop:
     ld   a, (ix + 0)            ; 19T delay
     ld   a, (ix + 0)            ; 19T delay
 ;    xor  a                      ; 4T
-;     out  (-2), a                ; 11T    Black border
+;    out  (-2), a                ; 11T    Black border
     ex   af, af'                ; 4T
 
     ei                          ; 4T
