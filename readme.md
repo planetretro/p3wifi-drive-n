@@ -79,8 +79,8 @@ There's no need to do this, but you'll need iDSK and zmakebas installed to do so
 
 Change directory to spectrum, then run `./build.sh` to rebuild the disk image.
 
-https://github.com/cpcsdk/idsk
-https://github.com/z00m128/zmakebas
+* https://github.com/cpcsdk/idsk
+* https://github.com/z00m128/zmakebas
 
 ## Credits
 
