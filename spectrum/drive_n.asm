@@ -36,7 +36,7 @@ start2:
     or   a
     jr   nz, 1F
 
-;        call text_init
+;    call text_init
 
     call loadWiFiConfig
     call initWiFi

@@ -28,12 +28,17 @@ uartWriteStringZ:
     call uartWriteByte
     pop  hl
 
-    ld   a, r
-    and  7
-    out  (-2), a
+    call flashBorder
 
     inc  hl
     jr   1B
+
+flashBorder:
+    ld   a, r
+    and  7
+    or   1
+    out  (-2), a
+    ret
 
 ; Print zero-terminated string
 ; HL - string pointer

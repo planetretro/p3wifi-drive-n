@@ -153,7 +153,41 @@ getPacket
     push    hl
     pop     bc                      ; BC = byte count
 
-    ld      hl, (data_pointer)
+    ld      hl, (data_pointer)      ; Check if data pointer is 0
+    ld      a, h
+    or      l
+    jp      z, .dumpRead            ; If it is, then read the bytes but don't save them
+
+    ; Clear sector buffer to filler byte, so if something goes wrong
+    ; we don't return the previous sector buffer contents back to
+    ; +3DOS
+
+;     di
+;     ld      a, (ddl_parms)          ; get buffer page from floppy command
+;     call    ram_page_in
+;
+;     push    hl
+;     push    bc
+;
+;     ld      a, 0xe5
+;     ld      bc, 511
+;     push    hl
+;     pop     de
+;     inc     de
+;     ld      (hl), a
+;     ldir
+;
+;     call    ram_page_out
+;
+;     pop     bc
+;     pop     hl
+;
+;     ei
+
+    ; This code is gnarly, with multiple stack operations and memory
+    ; pages. Be very careful editing it (speaking from experience),
+    ; as it's easy to mess up.
+
 .readByte
     push    bc
     push    hl
@@ -187,18 +221,31 @@ getPacket
     ei
     ret
 
+    ; Read bytes from the UART and throw them away until BC
+    ; bytes have been read
+
+.dumpRead
+    push    bc
+    call    uartReadBlocking
+    pop     bc
+    dec     bc
+    ld      a, b
+    or      c
+    jr      z, .dumpRead
+    ret
+
 .checkIpdStart
-    call uartReadBlocking : cp 'I' : jr nz, getPacket
-    call uartReadBlocking : cp 'P' : jr nz, getPacket
-    call uartReadBlocking : cp 'D' : jr nz, getPacket
+    call uartReadBlocking : cp 'I' : jp nz, getPacket
+    call uartReadBlocking : cp 'P' : jp nz, getPacket
+    call uartReadBlocking : cp 'D' : jp nz, getPacket
     call uartReadBlocking ; Comma
     jr   .readPacket
 
 .checkClosed
-    call uartReadBlocking : cp 'S' : jr nz, getPacket
-    call uartReadBlocking : cp 'E' : jr nz, getPacket
-    call uartReadBlocking : cp 'D' : jr nz, getPacket
-    call uartReadBlocking : cp 13  : jr nz, getPacket
+    call uartReadBlocking : cp 'S' : jp nz, getPacket
+    call uartReadBlocking : cp 'E' : jp nz, getPacket
+    call uartReadBlocking : cp 'D' : jp nz, getPacket
+    call uartReadBlocking : cp 13  : jp nz, getPacket
     jp   closed_callback
 
 closed_callback:
