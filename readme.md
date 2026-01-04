@@ -43,6 +43,12 @@ in a terminal, and the server will be up and running.
 
 The client disk is already built in `spectrum/build/driven.dsk`.
 
+Make sure to do this before anything else (so we load and save stuff to the correct place when configuring the IP address of the server)
+
+```
+load"b:":save"b:" : rem ...or whatever drive you're using for the driven.dsk image
+```
+
 There's a program on there called `config.bas`. Load this first, and enter the IP address of the computer running the disk image server.
 
 This will load and patch driven.bin with the IP address you entered and will save the code, so you only have to do this once (as long as the IP address of the disk image server remains static).
@@ -56,7 +62,6 @@ copy"c:iw.cfg"to"b:"
 Once that's done, you can do:
 
 ```basic
-load"b:":save"b:" : rem ...or whatever drive you're using
 load"disk"
 ```
 
@@ -66,9 +71,7 @@ Once WiFi has connected, you should be able to do:
 cat"n:"
 ```
 
-and see the contents of the drive.
-
-Once that works, you can now copy / load files from drive N to whatever you want.
+and see the contents of the drive. Once that works, you can now copy / load files from drive N to whatever you want on the Spectrum.
 
 ## Building the client
 
