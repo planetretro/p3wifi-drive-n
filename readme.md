@@ -21,7 +21,7 @@ You'll need libdsk installed on your machine to build the server.
 brew install libdsk
 
 # debian
-apt install libdsk4
+apt install libdsk4-dev
 
 # arch
 yay -S libdsk
@@ -72,6 +72,10 @@ cat"n:"
 ```
 
 and see the contents of the drive. Once that works, you can now copy / load files from drive N to whatever you want on the Spectrum.
+
+## Changing disk images
+
+Quit the server with CTRL+C, then re-run the machine code on the Spectrum (GOTO 30) to reset drive 'N:'. After that, restart the server with a different disk image and you should be good to go.
 
 ## Building the client
 
