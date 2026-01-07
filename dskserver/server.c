@@ -19,14 +19,14 @@ DSK_GEOMETRY geom = {
     .dg_sidedness = SIDES_ALT,
     .dg_cylinders = 40,
     .dg_heads = 1,
-    .dg_sectors = 10,
+    .dg_sectors = 9,
     .dg_secbase = 1,
     .dg_secsize = 512,
     .dg_datarate = RATE_SD,
     .dg_rwgap = 42,
     .dg_fmtgap = 82,
     .dg_fm = RECMODE_MFM,
-    .dg_nomulti = 1,
+    .dg_nomulti = 0,
     .dg_noskip = 0
 };
 
@@ -177,6 +177,7 @@ void handle_client(int client_socket) {
     if (1 || cmd.ddCmd == 0x05) {
         memset(sector_data, 0, sizeof(sector_data));
         printf(" Read: Track %d, Sector %d, Head %d\n", cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+
         result = dsk_pread(driver, &geom, sector_data, cmd.ddTrack, cmd.ddHead, cmd.ddStartSec);
 
         if (result != DSK_ERR_OK) {
