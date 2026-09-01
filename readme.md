@@ -12,7 +12,7 @@ See [this video](https://www.youtube.com/watch?v=A6ab68BPvUA) to see it in actio
 
 ## Building the server
 
-> The server only works on Linux or macOS. I don't run Windows, and I certainly don't program for it, so the server part would need to be written by someone else for Windows machines.
+> The server has only been tested by me on Linux and macOS. I don't use Windows but have been told by some users that they have managed to compile and run it using WSL. As such I won't be able to deal with any Windows support requests, but it does technically work - you're just basically on your own if using it on Windows.
 
 You'll need libdsk installed on your machine to build the server.
 
