@@ -36,8 +36,6 @@ start2:
     or   a
     jr   nz, 1F
 
-;    call text_init
-
     call loadWiFiConfig
     call initWiFi
     ld   a, 1                           ; Flag wifi as connected
@@ -384,12 +382,6 @@ dos_out:
     pop  af
     ret
 
-; dosError:
-;     ld   (0x4000), a
-;     ld   a, 2
-;     out  (-2), a
-;     ret
-
 ; Data
 
 ; Space for floppy emulation command
@@ -424,8 +416,6 @@ tmp_stack:
     include "utils.asm"
     include "wifi.asm"
     include "request.asm"
-;    include "screen42.asm"
-;    include "font42.asm"
 
 conf_file
     defb "iw.cfg",0xff
@@ -458,6 +448,6 @@ end:
 ; +$0D    1     Gap size
 ; +$0E    1     Dummy data length ($ff)
 
-    save3dos "driven.bin", start, end-start
-    savebin  "drvn.bin", start, end-start
+    save3dos "build/driven.bin", start, end-start   ; Version for build disk
+    savebin  "drive_n.bin", start, end-start        ; Version for loading directly to RAM
 

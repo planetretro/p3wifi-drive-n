@@ -4,7 +4,6 @@ pushRing
     ld   b, 32
 
     ; Copy bytes in buffer down one position
-
     ld   hl, ring_buffer + 1
     ld   de, ring_buffer
 1:
@@ -65,34 +64,6 @@ clearRing:
     ld   (hl), a
     ldir
     ret
-
-; dumpRing:
-;     push af
-;
-;     ld   b, 32
-;     ld   hl, ring_buffer
-; 1:
-;     ld   a, (hl)
-;     cp   31
-;     jr   c, 1F
-; 2:
-;     push bc
-;     push hl
-;     call putc
-;     pop  hl
-;     pop  bc
-;
-;     inc  hl
-;     djnz 1B
-;
-;     ld   a, 13
-;     call putc
-;
-;     pop  af
-;     ret
-; 1:
-;     ld   a, '.'
-;     jr   2B
 
 ring_buffer
     ds  32, 0

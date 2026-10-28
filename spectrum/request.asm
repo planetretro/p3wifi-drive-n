@@ -11,9 +11,6 @@ loadSector:
 
     ret
 
-loadSectorBinary:
-    ret
-
 ; HL - domain stringZ
 ; DE - path stringZ
 ; BC - port stringZ
@@ -34,7 +31,6 @@ openRequest:
     ld      hl, cmd_open3
     call    okErrCmd
 
-    ; call    dumpRing
     cp      1
     jr      nz, reqErr
 
@@ -93,29 +89,6 @@ waitPrompt:
     call    searchRing
     jr      nc, waitPrompt
     ret
-
-sendBinaryData:
-    ld      (data_addr), hl
-    push    bc
-    pop     hl
-    ld      (data_len), hl
-
-    ld      hl, (data_addr)
-    ld      bc, (data_len)
-
-1:  ld      a, (hl)
-    push    hl
-    push    bc
-    call    uartWriteByte
-    call    flashBorder
-    pop     bc
-    pop     hl
-    inc     hl
-    dec     bc
-    ld      a, b
-    or      c
-    jr      nz, 1B
-    jp      restoreBorder
 
 closeSend:
     ld      hl, crlf

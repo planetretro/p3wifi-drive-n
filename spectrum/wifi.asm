@@ -158,32 +158,6 @@ getPacket
     or      l
     jp      z, .dumpRead            ; If it is, then read the bytes but don't save them
 
-    ; Clear sector buffer to filler byte, so if something goes wrong
-    ; we don't return the previous sector buffer contents back to
-    ; +3DOS
-
-;     di
-;     ld      a, (ddl_parms)          ; get buffer page from floppy command
-;     call    ram_page_in
-;
-;     push    hl
-;     push    bc
-;
-;     ld      a, 0xe5
-;     ld      bc, 511
-;     push    hl
-;     pop     de
-;     inc     de
-;     ld      (hl), a
-;     ldir
-;
-;     call    ram_page_out
-;
-;     pop     bc
-;     pop     hl
-;
-;     ei
-
     ; This code is gnarly, with multiple stack operations and memory
     ; pages. Be very careful editing it (speaking from experience),
     ; as it's easy to mess up.
