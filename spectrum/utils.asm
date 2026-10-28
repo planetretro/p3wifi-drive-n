@@ -1,25 +1,22 @@
-;    IFNDEF ZX48
-; ; This routine checks availability of extended(128K) memory.
-; ; Output:
-; ; Flag: Z - High memory available
-; checkHighMem:
-;     xor a : call changeBank : ld hl, #c000 : xor a : ld (hl), a ; Let's write in zero page zero value
-;     inc a : call changeBank : ld a, 13 : ld (hl), a             ; In other page - any other value. Let's write luck 13
-;     xor a : call changeBank : ld a, (hl) : and a                ; When we back to zero page - still there zero?!
-;     ret
-;
-; ; A - memory bank
-; changeBank:
-;     ld bc, #7ffd : or #18 : out (c), a : ld (bankm), a
-;     re
-;     ENDIF
+;    DEFINE DEBUG 1
+
+    IFDEF DEBUG
+putstr:
+1:
+    ld   a, (hl)
+    or   a
+    ret  z
+    rst  16
+    inc  hl
+    jp   1B
+    ENDIF
 
 uartWriteStringZ:
-;     IFDEF DEBUG
-;     push hl
-;     call putstr
-;     pop  hl
-;     ENDIF
+    IFDEF DEBUG
+    push hl
+    call putstr
+    pop  hl
+    ENDIF
 
 1:  ld   a, (hl)
     and  a

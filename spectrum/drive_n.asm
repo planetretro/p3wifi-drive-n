@@ -19,7 +19,6 @@ disk_type:
     defb    0                       ; Disk type
 
 start2:
-
     ; Set up the stack and save HL' so we can return to BASIC
 
     di
@@ -67,9 +66,10 @@ start2:
     push    hl
     ld      hl, dd_sel_format
     push    hl
-    jp      dos_tos
+    jp      dos_tos                 ; Call DOS and return
 
 login:
+    ; No-op as we're not a real floppy drive
     jp      cmd_success
 
 ;    B = Page for C000h (49152)...FFFFh (65535)
@@ -79,15 +79,25 @@ login:
 ;   HL = Address of buffer
 ;   IX = Address of XDPB
 read:
+    push ix
     ld   a, 5
     ld   (ddl_parms+$06), a             ; Read command
     call prepFloppyCmd
     call loadSector
+    pop  ix
     jr   nz, cmd_fail
     jr   cmd_success
 
+; Same call / return registers as read
 write:
-    jr   cmd_fail
+    push ix
+    ld   a, 6
+    ld   (ddl_parms+$06), a             ; Write command
+    call prepFloppyCmd
+    call storeSector
+    pop  ix
+    jr   nz, cmd_fail
+    jr   cmd_success
 
 prepFloppyCmd:
     push hl
@@ -117,13 +127,11 @@ cmd_fail:
 
 exit:
     di
-    ld      sp, (old_sp)
+    ld      sp, (old_sp)                ; Restore SP
     exx
-    ld      hl, (temp_hl)
+    ld      hl, (temp_hl)               ; Restore HL' for BASIC
     exx
-
     call    restoreBorder
-
     ei
     ret
 
@@ -181,10 +189,28 @@ hexToBuf:
     ret
 
 xdpb:
-    defs $1b, 0
+    ; CP/M 2.2 Disk Parameter Block for +3 standard 180KB format.
+    ; Writing sectors needs this in place otherwise will hang. dd_sel_format
+    ; fills in the extended bytes.
+    defw    36                  ; +$00 SPT: 9 sectors × 4 = 36 128-byte records
+    defb    3                   ; +$02 BSH: block shift (block = 128 << 3 = 1024)
+    defb    7                   ; +$03 BLM: block mask
+    defb    0                   ; +$04 EXM: extent mask
+    defw    174                 ; +$05 DSM: max block number (175 blocks)
+    defw    63                  ; +$07 DRM: max directory entry (64 entries)
+    defb    $c0                 ; +$09 AL0: blocks 0+1 reserved for directory
+    defb    $00                 ; +$0a AL1
+    defb    16                  ; +$0b CKS LSB: checksum vector size (DRM+1)/4
+    defb    $80                 ; +$0c CKS MSB with bit 7 set — marks fixed drive
+                                ; (l1829 skips disk-change; l180d won't
+                                ; log the drive out between accesses)
+    defw    1                   ; +$0d OFF: reserved tracks (track 0 = boot)
+    defs    $1b - 15, 0         ; $0f-$1a: dd_sel_format writes $11-$19
 
 .l17f6
-    defb    $04,'N',$00         ; flags,drive,unit
+    defb    $00,'N',$00         ; flags,drive,unit — bit 2 CLEAR so +3DOS
+                                ; doesn't try to probe the (non-existent) FDC
+                                ; for write-protect status during SAVE
     defb    $00,$00,$00,$00     ; last access,filesopen
     defw    $0000,$0000         ; #free direntries,last used
     defw    chksm_a,alloc_a     ; checksum vector,alloc bitmap
@@ -450,4 +476,3 @@ end:
 
     save3dos "build/driven.bin", start, end-start   ; Version for build disk
     savebin  "drive_n.bin", start, end-start        ; Version for loading directly to RAM
-

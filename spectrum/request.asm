@@ -3,13 +3,84 @@ loadSector:
     ld      de, d_path
     ld      bc, d_port
 
-    push    ix
     call    openRequest
     call    sendTextData
     call    loadData
-    pop     ix
 
     ret
+
+storeSector:
+    ; debug - yellow border
+    ld   a, 6
+    out  (-2), a
+    ; debug
+
+    ld      hl, d_host
+    ld      de, d_path
+    ld      bc, d_port
+
+    call    openRequest                 ; ends with uart write of "AT+CIPSEND="
+
+    ld      bc, 26 + 1024               ; command + hex-encoded sector payload
+    call    openSendData                ; writes "1050\r\n", waits for ">"
+    jr      nz, .fail
+
+    ld      hl, d_path                  ; 26-byte hex command (null-terminated)
+    call    uartWriteStringZ
+
+    ld      hl, (ddl_parms+1)           ; buffer start address
+    ld      bc, 512                     ; bytes to encode (× 2 = 1024 chars)
+.payloadLoop:
+    push    bc
+    push    hl
+
+    di
+    ld      a, (ddl_parms)              ; buffer bank
+    call    ram_page_in                 ; clobbers A,BC,E — HL,D,IX preserved
+    ld      a, (hl)                     ; grab byte while bank is in
+    ld      d, a                        ; stash in D (survives ram_page_out)
+    call    ram_page_out                ; clobbers A,BC — HL,D,IX preserved
+    ei
+
+    ld      a, d
+    call    sendHexByte                 ; 2 ASCII hex chars via UART
+
+    pop     hl
+    pop     bc
+    inc     hl
+    dec     bc
+    ld      a, b
+    or      c
+    jr      nz, .payloadLoop
+
+    call    closeSend                   ; trailing CRLF
+    call    dropData                    ; discard anything else
+
+    xor     a                           ; Z = success
+    ret
+
+.fail:
+    or      1                           ; NZ = failure, caller takes cmd_fail
+    ret
+
+; A = byte; writes high nibble then low nibble as ASCII hex via UART.
+sendHexByte:
+    push    af                          ; save raw byte for second nibble
+    rra
+    rra
+    rra
+    rra
+    call    .nibble                     ; write high nibble
+    pop     af
+    jp      .nibble                     ; tail: write low nibble
+
+.nibble:
+    and     0x0f
+    add     a, 0x90
+    daa
+    adc     a, 0x40
+    daa
+    jp      uartWriteByte               ; tail: UART write returns to caller
 
 ; HL - domain stringZ
 ; DE - path stringZ
@@ -54,6 +125,10 @@ reqErr:
     ld      a, 2
     out     (-2), a
     ret
+
+dropData:
+    ld     hl, 0                     ; Flag to getPacket to discard remaining packet data
+    ld     (data_pointer), hl        ; by setting data_pointer to 0
 
 ; (ddl_params+0) = page to load data in to
 ; data_pointer = pointer to buffer, or 0 to throw away data
@@ -108,7 +183,7 @@ fstream         defb    0
 crlf            defb    13, 10, 0
 
 d_path          defs    32, 0
-d_host          defb    '192.168.7.164', 0
+d_host          defb    '192.168.1.50', 0
                 defs    32
 d_port          db      '7650', 0
                 defs    1
@@ -118,4 +193,3 @@ connectionOpen  db      0
 srv_ptr         dw  0
 path_ptr        dw  0
 port_ptr        dw  0
-

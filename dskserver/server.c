@@ -46,6 +46,27 @@ typedef struct {
 } DiskCommand;
 
 /**
+ * Decode `len` ASCII hex chars from `hex` into `out`.
+ * len must be even; returns 0 on success, -1 on bad char or odd length.
+ */
+static int hex_to_bytes(const char *hex, size_t len, unsigned char *out) {
+    if (len & 1) return -1;
+    for (size_t i = 0; i < len; i += 2) {
+        unsigned int v = 0;
+        for (int n = 0; n < 2; n++) {
+            char c = hex[i + n];
+            v <<= 4;
+            if (c >= '0' && c <= '9')      v |= c - '0';
+            else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
+            else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
+            else return -1;
+        }
+        out[i / 2] = (unsigned char)v;
+    }
+    return 0;
+}
+
+/**
  * Parse ASCII hex string into disk command structure
  * Example input: "05 09 01 00 01 02 01 2A FF"
  * Returns 0 on success, -1 on error
@@ -134,22 +155,28 @@ void handle_client(int client_socket) {
     // Disable Nagle's algorithm for immediate send (ESP-12 compatibility)
     setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
 
-    // Receive command from client
+    // Receive command from client. Loop until we have at least the 26-byte
+    // command header; a single CIPSEND may deliver command + payload together,
+    // in which case we read as much as fits in one go.
     memset(recv_buffer, 0, BUFFER_SIZE);
-    bytes_received = recv(client_socket, recv_buffer, BUFFER_SIZE - 1, 0);
-
-    if (bytes_received <= 0) {
-        if (bytes_received == 0) {
-            printf("Client disconnected\n");
-        } else {
-            perror("recv failed");
+    bytes_received = 0;
+    while (bytes_received < 26) {
+        ssize_t n = recv(client_socket, recv_buffer + bytes_received,
+                         BUFFER_SIZE - 1 - bytes_received, 0);
+        if (n <= 0) {
+            if (n == 0) {
+                printf("Client disconnected\n");
+            } else {
+                perror("recv failed");
+            }
+            close(client_socket);
+            return;
         }
-        close(client_socket);
-        return;
+        bytes_received += n;
     }
 
     recv_buffer[bytes_received] = '\0';
-    printf("Received %d bytes\n", bytes_received);
+    printf("Received %zd bytes\n", bytes_received);
 
     // Parse the command
     if (parse_command(recv_buffer, &cmd) != 0) {
@@ -174,7 +201,7 @@ void handle_client(int client_socket) {
     }
 
     // Read sector from disk
-    if (1 || cmd.ddCmd == 0x05) {
+    if (cmd.ddCmd == 0x05) {
         memset(sector_data, 0, sizeof(sector_data));
         printf(" Read: Track %d, Sector %d, Head %d\n", cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
 
@@ -205,8 +232,43 @@ void handle_client(int client_socket) {
         }
     }
     else if (cmd.ddCmd == 0x06) {
-        printf("Write: Track %d, Sector %d, Head %d\n", cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
-        send(client_socket, "OK", 2, 0);
+        char hex_buf[1024];
+        size_t have = 0;
+
+        // The first recv() may have consumed some payload bytes past the
+        // 26-byte command header; carry them forward.
+        if (bytes_received > 26) {
+            size_t extra = bytes_received - 26;
+            if (extra > sizeof(hex_buf)) extra = sizeof(hex_buf);
+            memcpy(hex_buf, recv_buffer + 26, extra);
+            have = extra;
+        }
+
+        // Pull the rest of the ASCII-hex payload off the socket.
+        while (have < sizeof(hex_buf)) {
+            ssize_t n = recv(client_socket, hex_buf + have,
+                             sizeof(hex_buf) - have, 0);
+            if (n <= 0) {
+                perror("recv payload");
+                goto done;
+            }
+            have += n;
+        }
+
+        if (hex_to_bytes(hex_buf, sizeof(hex_buf), sector_data) != 0) {
+            fprintf(stderr, "Bad hex payload\n");
+            goto done;
+        }
+
+        printf("Write: Track %d, Sector %d, Head %d\n",
+               cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+
+        result = dsk_pwrite(driver, &geom, sector_data,
+                            cmd.ddTrack, cmd.ddHead, cmd.ddStartSec);
+        if (result != DSK_ERR_OK) {
+            fprintf(stderr, "dsk_pwrite failed: %d\n", result);
+        }
+        /* No reply payload: fall through to shutdown+close in `done:` */
     }
 
 done:
