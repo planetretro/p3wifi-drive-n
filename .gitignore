@@ -1,4 +1,4 @@
 *.lst
 spectrum/*.bin
 dskserver/*.o
-
+.DS_Store
