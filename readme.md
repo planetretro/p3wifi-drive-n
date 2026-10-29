@@ -1,5 +1,7 @@
 # +3WiFi - Disk Server
 
+> WARNING: This branch contains beta code that has not been tested as thoroughly as the code in the main branch. Don't use it to save data over the network to disk images that you don't have backed up! Although it works for me, I accept no responsibility if it mangles your data!
+
 This code implements a disk image server + related Spectrum +3 client to access disk images over WiFi on the Spectrum +3.
 
 > A +3WiFi card from [Planet Retro](https://planet-retro.co.uk) is required for this software to work. It's entirely possible to swap out the ESP-12 code for another driver to use an ESP-12 connected to the AY chip etc.
@@ -8,11 +10,11 @@ Once up and running, you'll have a new drive 'N:' in BASIC that can access files
 
 See [this video](https://www.youtube.com/watch?v=A6ab68BPvUA) to see it in action.
 
-> Note the software is currently read only (you can't save files over the network), and it only works with standard 180Kb disk images (.dsk file with a size of 194,816 bytes)
+> Note that this software currently only works with standard 180Kb disk images (.dsk file with a size of 194,816 bytes)
 
 ## Building the server
 
-> The server has only been tested by me on Linux and macOS. I don't use Windows but have been told by some users that they have managed to compile and run it using WSL. As such I won't be able to deal with any Windows support requests, but it does technically work - you're just basically on your own if using it on Windows.
+> The server has only been tested by me on Linux and macOS. I don't use Windows but have been told by some users that they have managed to compile and run it using WSL. As such I won't be able to deal with any Windows support requests, but it does work - you're just on your own if using it on Windows.
 
 You'll need libdsk installed on your machine to build the server.
 
@@ -49,9 +51,11 @@ Make sure to do this before anything else (so we load and save stuff to the corr
 load"b:":save"b:" : rem ...or whatever drive you're using for the driven.dsk image
 ```
 
-There's a program on there called `config.bas`. Load this first, and enter the IP address of the computer running the disk image server.
+There's a BASIC program on the disk called `config.bas`. Load this first, and enter the IP address of the computer running the disk image server.
 
-This will load and patch driven.bin with the IP address you entered and will save the code, so you only have to do this once (as long as the IP address of the disk image server remains static).
+This will load and patch driven.bin with the IP address you entered and will save the code back to the disk, so you only have to do this once (as long as the IP address of the disk image server remains static).
+
+> If you ever update the software from Github to a newer version, you will need to run `config.bas` again before using it.
 
 After that, you'll need to make sure you have `iw.cfg` (your SSID / password file) from when you originally configured the card copied to the disk image, e.g.
 
@@ -92,4 +96,3 @@ Change directory to spectrum, then run `./build.sh` to rebuild the disk image.
 * [John Elliot](https://www.seasip.info/Unix/LibDsk/index.html) for libdsk
 * [cygnus.speccy.cz](cygnus.speccy.cz) for the amazing 56k serial port code
 * Amstrad (some of the client code is directly ripped from the +3DOS ROM)
-
