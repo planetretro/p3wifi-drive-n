@@ -162,9 +162,8 @@ int parse_command(const char *input, DiskCommand *cmd) {
     cmd->ddGap = (unsigned char)values[7];
     cmd->ddLen = (unsigned char)values[8];
 
-    // drive_n.asm:l1bd4 shifts the physical side bit twice before ORing into
-    // the unit byte, landing it at bit 2. Required for 2-head geometries.
-    cmd->ddHead = (cmd->ddUnit & 0x04) ? 1 : 0;
+    // Side is already in ddSide (ddl_parms+9)
+    cmd->ddHead = cmd->ddSide;
 
     return 0;
 }
@@ -243,7 +242,12 @@ int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, uint8_t out[27]) {
     out[0x0E] = (off >> 8) & 0xff;
     out[0x0F] = (uint8_t)psh;
     out[0x10] = (uint8_t)phm;
-    out[0x11] = (g->dg_sidedness == SIDES_ALT) ? 0x01 : 0x00;
+    /* +3DOS sidedness byte: $00 single, $01 ALT, $81 successive. Single-sided
+     * drives MUST be $00 — otherwise l1bb5 does ALT translation and the
+     * side bit gets ORed into the unit byte on every access. */
+    if (g->dg_heads < 2)                   out[0x11] = 0x00;
+    else if (g->dg_sidedness == SIDES_ALT) out[0x11] = 0x01;
+    else                                   out[0x11] = 0x81;
     out[0x12] = (uint8_t)g->dg_cylinders;
     out[0x13] = (uint8_t)g->dg_sectors;
     out[0x14] = (uint8_t)g->dg_secbase;
