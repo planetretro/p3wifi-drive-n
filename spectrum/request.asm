@@ -30,16 +30,16 @@ storeSector:
 
     ld      hl, (ddl_parms+1)           ; buffer start address
     ld      bc, 512                     ; bytes to encode (× 2 = 1024 chars)
-.payloadLoop:
+1:
     push    bc
     push    hl
 
     di
     ld      a, (ddl_parms)              ; buffer bank
-    call    ram_page_in                 ; clobbers A,BC,E — HL,D,IX preserved
-    ld      a, (hl)                     ; grab byte while bank is in
+    call    ram_page_in
+    ld      a, (hl)                     ; grab byte while bank is paged in
     ld      d, a                        ; stash in D (survives ram_page_out)
-    call    ram_page_out                ; clobbers A,BC — HL,D,IX preserved
+    call    ram_page_out
     ei
 
     ld      a, d
@@ -51,10 +51,10 @@ storeSector:
     dec     bc
     ld      a, b
     or      c
-    jr      nz, .payloadLoop
+    jr      nz, 1B
 
     call    closeSend                   ; trailing CRLF
-    call    dropData                    ; discard anything else
+    call    dropData                    ; discard trailing packet data
 
     xor     a                           ; Z = success
     ret

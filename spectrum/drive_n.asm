@@ -201,14 +201,12 @@ xdpb:
     defb    $c0                 ; +$09 AL0: blocks 0+1 reserved for directory
     defb    $00                 ; +$0a AL1
     defb    16                  ; +$0b CKS LSB: checksum vector size (DRM+1)/4
-    defb    $80                 ; +$0c CKS MSB with bit 7 set — marks fixed drive
-                                ; (l1829 skips disk-change; l180d won't
-                                ; log the drive out between accesses)
+    defb    $80                 ; +$0c CKS MSB with bit 7 set to indicate fixed drive
     defw    1                   ; +$0d OFF: reserved tracks (track 0 = boot)
     defs    $1b - 15, 0         ; $0f-$1a: dd_sel_format writes $11-$19
 
 .l17f6
-    defb    $00,'N',$00         ; flags,drive,unit — bit 2 CLEAR so +3DOS
+    defb    $00,'N',$00         ; flags,drive,unit - bit 2 CLEAR so +3DOS
                                 ; doesn't try to probe the (non-existent) FDC
                                 ; for write-protect status during SAVE
     defb    $00,$00,$00,$00     ; last access,filesopen
