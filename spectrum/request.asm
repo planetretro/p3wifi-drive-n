@@ -10,12 +10,10 @@ loadSector:
 ; Fetch the 27-byte XDPB (DPB + extended format fields) from the server.
 ;   Entry: ddl_parms+6 already = $07; prepFloppyCmd already built d_path.
 ;   Exit:  Z  = success; bytes 0..$1A of xdpb populated.
-;          NZ = failure; xdpb untouched.
+;          NZ = failure; xdpb may be partially written.
 fetchGeom:
-    ; Point data_pointer at the scratch buffer before the send, same way
-    ; prepFloppyCmd sets it before read:'s loadSector call. getPacket.readByte
-    ; will deposit the raw hex chars from the +IPD, response here.
-    ld      hl, geomBuf
+    ; Stream the 27 raw bytes straight into the XDPB
+    ld      hl, xdpb
     ld      (data_pointer), hl
 
     ld      hl, d_host
@@ -25,72 +23,23 @@ fetchGeom:
     call    sendTextData                ; 26-byte cmd via CIPSEND=26
     call    loadData                    ; drains until CLOSED
 
-    ; How many chars did we actually get? data_pointer advanced that many.
+    ; data_pointer advanced by the number of bytes received.
     ld      hl, (data_pointer)
-    ld      de, geomBuf
+    ld      de, xdpb
     or      a                           ; clear CF
     sbc     hl, de                      ; HL = bytes received
     ld      a, h
     or      a
     jr      nz, .fail                   ; > 255 ⇒ bogus
     ld      a, l
-    cp      54
-    jr      nz, .fail                   ; need exactly 54
-
-    ; Convert 27 pairs of ASCII hex into XDPB bytes 0..$1A.
-    ld      hl, geomBuf
-    ld      de, xdpb
-    ld      b, 27
-.cvt:
-    push    bc
-    call    .hexPair                    ; (hl) → A, HL += 2
-    jr      nz, .cvtFail
-    ld      (de), a
-    inc     de
-    pop     bc
-    djnz    .cvt
+    cp      27
+    jr      nz, .fail                   ; need exactly 27
 
     xor     a                           ; Z = success
     ret
 
-.cvtFail:
-    pop     bc
 .fail:
     or      1                           ; NZ = failure
-    ret
-
-; Decode 2 ASCII hex chars at (hl) into a byte in A. Advances HL by 2.
-;   Z  = valid pair, A = byte
-;   NZ = at least one char was not [0-9A-F], A undefined.
-.hexPair:
-    ld      a, (hl)
-    inc     hl
-    call    .hexNib
-    ret     nz
-    rlca
-    rlca
-    rlca
-    rlca
-    ld      c, a                        ; stash high nibble
-    ld      a, (hl)
-    inc     hl
-    call    .hexNib
-    ret     nz
-    or      c
-    cp      a                           ; Z=1, A preserved
-    ret
-
-; Decode ASCII hex char in A → nibble 0..15 in A. Z=valid, NZ=invalid.
-.hexNib:
-    sub     '0'
-    cp      10
-    jr      c, .hnOk                    ; '0'-'9'
-    sub     'A' - '0'
-    cp      6
-    ret     nc                          ; outside 'A'-'F' → NC → NZ (invalid)
-    add     a, 10                       ; 'A'-'F' → 10..15
-.hnOk:
-    cp      a                           ; Z=1, A preserved
     ret
 
 storeSector:
@@ -259,6 +208,3 @@ connectionOpen  db      0
 srv_ptr         dw  0
 path_ptr        dw  0
 port_ptr        dw  0
-
-; Scratch area for fetchGeom: 54 ASCII hex chars = 27 XDPB bytes.
-geomBuf         defs    54, 0

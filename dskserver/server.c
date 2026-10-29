@@ -328,18 +328,16 @@ void handle_client(int client_socket) {
             goto done;   /* close without sending → Spectrum login bails */
         }
 
-        char hex[55];
-        for (int i = 0; i < 27; i++) {
-            sprintf(hex + i * 2, "%02X", xdpb[i]);
+        if (verbosity >= 2) {
+            printf(" Geom:");
+            for (int i = 0; i < 27; i++) printf(" %02X", xdpb[i]);
+            printf("\n");
         }
-        hex[54] = '\0';
 
-        if (verbosity >= 2) printf(" Geom: %s\n", hex);
-
-        /* 54 ASCII hex chars = 27 XDPB bytes. Loop send for ESP compatibility. */
+        /* 27 raw XDPB bytes. Loop send for ESP compatibility. */
         ssize_t sent = 0;
-        while (sent < 54) {
-            ssize_t n = send(client_socket, hex + sent, 54 - sent, 0);
+        while (sent < 27) {
+            ssize_t n = send(client_socket, xdpb + sent, 27 - sent, 0);
             if (n < 0) { perror("send geom"); goto done; }
             sent += n;
         }
