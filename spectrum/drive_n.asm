@@ -69,6 +69,13 @@ start2:
     ld      (hl), 0
     ldir
 
+    ; Clear bit 0 of (xdpb+$1b) — the "drive logged in" flag that +3DOS
+    ; sets after our login hook succeeds. Without this, a re-run (GOTO 30
+    ; from the loader) sees stale "logged in" state, skips the login hook,
+    ; and reads from the zeroed DPB with nonsense geometry.
+    ld      hl, xdpb+$1b
+    res     0, (hl)
+
     jp      exit
 
 ; dd_login entry conditions (p3dos.asm:2046-2070) are only C=Unit, IX=XDPB.

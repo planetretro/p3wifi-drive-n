@@ -23,32 +23,38 @@ static int verbosity = 1;
 
 DSK_PDRIVER driver = NULL;
 
+// dir_blocks: how many disk blocks to set aside for the directory. We
+// hard-code the values the +3 ROM uses for the two standard sizes so N:
+// shows the same free space as a real +3 would: 180K uses 2, 720K uses 4.
+// Set to 0 for 4M and 8M where there's no ROM standard to match, and
+// build_xdpb works out a sensible value from the disk size instead.
 typedef struct {
     const char   *name;
+    int           dir_blocks;
     DSK_GEOMETRY  g;
 } named_geom_t;
 
 // Supported disk geometries
 static const named_geom_t GEOMETRIES[] = {
-    { "180K", {
+    { "180K", 2, {
         .dg_sidedness = SIDES_ALT, .dg_cylinders = 40,  .dg_heads = 1, .dg_sectors = 9,
         .dg_secbase   = 1,         .dg_secsize   = 512,
         .dg_datarate  = RATE_SD,   .dg_rwgap     = 42,  .dg_fmtgap = 82,
         .dg_fm        = RECMODE_MFM
     }},
-    { "720K", {
+    { "720K", 4, {
         .dg_sidedness = SIDES_ALT, .dg_cylinders = 80,  .dg_heads = 2, .dg_sectors = 9,
         .dg_secbase   = 1,         .dg_secsize   = 512,
         .dg_datarate  = RATE_SD,   .dg_rwgap     = 42,  .dg_fmtgap = 82,
         .dg_fm        = RECMODE_MFM
     }},
-    { "4M", {
+    { "4M", 0, {
         .dg_sidedness = SIDES_ALT, .dg_cylinders = 128, .dg_heads = 2, .dg_sectors = 32,
         .dg_secbase   = 1,         .dg_secsize   = 512,
         .dg_datarate  = RATE_HD,   .dg_rwgap     = 42,  .dg_fmtgap = 82,
         .dg_fm        = RECMODE_MFM
     }},
-    { "8M", {
+    { "8M", 0, {
         .dg_sidedness = SIDES_ALT, .dg_cylinders = 128, .dg_heads = 2, .dg_sectors = 64,
         .dg_secbase   = 1,         .dg_secsize   = 512,
         .dg_datarate  = RATE_ED,   .dg_rwgap     = 42,  .dg_fmtgap = 82,
@@ -59,6 +65,10 @@ static const named_geom_t GEOMETRIES[] = {
 
 // Current geometry
 DSK_GEOMETRY geom;
+
+// How many blocks of the disk to reserve for the directory. 0 = let
+// build_xdpb work it out from the disk size.
+int dir_blocks_override = 0;
 
 // Command structure
 typedef struct {
@@ -177,7 +187,8 @@ int parse_command(const char *input, DiskCommand *cmd) {
  * Returns 0 on success, non-zero if no BSH 3..7 keeps the alloc bitmap under
  * MAX_ALLOC_BYTES (which only happens for implausibly large disks).
  */
-int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, uint8_t out[27]) {
+int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, int dir_blocks_hint,
+               uint8_t out[27]) {
     /* --- Physical geometry straight from libdsk --- */
     unsigned ss = (unsigned)g->dg_secsize;
     int psh = 0;
@@ -187,7 +198,10 @@ int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, uint8_t out[27]) {
 
     /* --- CP/M DPB policy --- */
     int off = (capacity <= 1024u * 1024u) ? 1 : 0;
-    size_t reserved = (size_t)off * g->dg_heads * g->dg_sectors * g->dg_secsize;
+    /* OFF is in CP/M logical tracks. For ALT, a logical track = one side,
+     * i.e. SPT × secsize bytes — NOT a whole cylinder. +3DOS maps
+     * logical track 0 to physical cyl 0 side 0 only. */
+    size_t reserved = (size_t)off * g->dg_sectors * g->dg_secsize;
     if (reserved >= capacity) return -1;
     size_t data_bytes = capacity - reserved;
 
@@ -217,7 +231,9 @@ int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, uint8_t out[27]) {
             : ((1 << (bsh - 4)) - 1);
 
     size_t entries_per_block = block / 32;
-    int dir_blocks = (int)((DIR_ENTRIES_MIN + entries_per_block - 1) / entries_per_block);
+    int dir_blocks = dir_blocks_hint > 0
+        ? dir_blocks_hint
+        : (int)((DIR_ENTRIES_MIN + entries_per_block - 1) / entries_per_block);
     if (dir_blocks < 1) dir_blocks = 1;
     int entries = dir_blocks * (int)entries_per_block;
     int drm = entries - 1;
@@ -238,7 +254,7 @@ int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, uint8_t out[27]) {
     out[0x09] = (uint8_t)al0;
     out[0x0A] = (uint8_t)al1;
     out[0x0B] = cks & 0xff;
-    out[0x0C] = ((cks >> 8) & 0x7f) | 0x80;         /* bit 7 = fixed drive   */
+    out[0x0C] = (cks >> 8) & 0x7f;
     out[0x0D] = off & 0xff;
     out[0x0E] = (off >> 8) & 0xff;
     out[0x0F] = (uint8_t)psh;
@@ -328,7 +344,7 @@ void handle_client(int client_socket) {
         size_t cap = (size_t)geom.dg_cylinders * geom.dg_heads
                    * geom.dg_sectors * geom.dg_secsize;
 
-        if (build_xdpb(&geom, cap, xdpb) != 0) {
+        if (build_xdpb(&geom, cap, dir_blocks_override, xdpb) != 0) {
             fprintf(stderr, "build_xdpb failed for capacity %zu bytes\n", cap);
             goto done;   /* close without sending → Spectrum login bails */
         }
@@ -612,6 +628,8 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     }
+
+    dir_blocks_override = chosen->dir_blocks;
 
     /* Copy the chosen geometry into the live `geom` global. All subsequent
      * dsk_pread / dsk_pwrite / build_xdpb calls use this. */

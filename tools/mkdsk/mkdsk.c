@@ -7,7 +7,13 @@
 
 /* Four fixed geometries. Shared params (sidedness, sector base, sector size,
  * MFM, gap values) are set in build_geometry(); only the differentiators
- * live in this table. */
+ * live in this table.
+ *
+ * disc_spec is the 10-byte "disk specification" written to byte 0..9 of
+ * track 0 head 0 sector 1. +3DOS reads this on login to pick a geometry. For
+ * 180K/720K we use the standard ROM Type-0 / Type-3 values so a Gotek / +3
+ * auto-detects them. For 4M/8M we write a non-standard marker (byte 0 = $FF,
+ * rest varied) so that a +3 will reject them if they ever end up on a Gotek. */
 typedef struct {
     const char      *name;
     unsigned         cylinders;
@@ -17,15 +23,28 @@ typedef struct {
     const char      *driver;        /* "dsk" for emulator-compatible containers,
                                      * "raw" where sector count exceeds the
                                      * 29/track DSK/EDSK ceiling. */
+    unsigned char    disc_spec[10];
     const char      *capacity_desc;
 } format_t;
 
 static const format_t FORMATS[] = {
-    { "180K",  40, 1,  9, RATE_SD, "dsk", "180 KB (+3 single-sided, CPCEMU .dsk)"       },
-    { "720K",  80, 2,  9, RATE_SD, "dsk", "720 KB (PCW double-sided, CPCEMU .dsk)"      },
-    { "4M",   128, 2, 32, RATE_HD, "raw", "4 MB (custom, 8 KB blocks, raw)"             },
-    { "8M",   128, 2, 64, RATE_ED, "raw", "8 MB (custom, 16 KB blocks, raw)"            },
+    { "180K",  40, 1,  9, RATE_SD, "dsk",
+      { 0x00, 0x00, 0x28, 0x09, 0x02, 0x01, 0x03, 0x02, 0x2a, 0x52 },
+      "180 KB (+3 single-sided, CPCEMU .dsk)" },
+
+    { "720K",  80, 2,  9, RATE_SD, "dsk",
+      { 0x03, 0x81, 0x50, 0x09, 0x02, 0x01, 0x04, 0x04, 0x2a, 0x52 },
+      "720 KB (PCW double-sided, CPCEMU .dsk)" },
+
+    { "4M",   128, 2, 32, RATE_HD, "raw",
+      { 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00 },
+      "4 MB (custom, 8 KB blocks, raw)" },
+
+    { "8M",   128, 2, 64, RATE_ED, "raw",
+      { 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x00 },
+      "8 MB (custom, 16 KB blocks, raw)" },
 };
+
 #define NFORMATS (sizeof(FORMATS) / sizeof(FORMATS[0]))
 
 static void usage(FILE *out, const char *progname) {
@@ -152,6 +171,20 @@ int main(int argc, char **argv) {
                 return 5;
             }
         }
+    }
+
+    /* Stamp the +3DOS disc spec into the first sector (track 0, head 0,
+     * sector 1). ROM reads only the first 10 bytes; keep the rest $E5. */
+    unsigned char spec_sector[512];
+    memset(spec_sector, 0xE5, sizeof(spec_sector));
+    memcpy(spec_sector, fmt->disc_spec, sizeof(fmt->disc_spec));
+
+    err = dsk_pwrite(drv, &geom, spec_sector, 0, 0, geom.dg_secbase);
+    if (err != DSK_ERR_OK) {
+        fprintf(stderr, "dsk_pwrite (disc spec) failed: %s\n", dsk_strerror(err));
+        dsk_close(&drv);
+        unlink(outfile);
+        return 5;
     }
 
     err = dsk_close(&drv);
