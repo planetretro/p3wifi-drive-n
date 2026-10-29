@@ -8,7 +8,7 @@ All the standard BASIC disk functions (`SAVE`, `LOAD`, `CAT`, `COPY` and `ERASE`
 
 See [this](https://www.youtube.com/watch?v=A6ab68BPvUA) or [this](https://www.youtube.com/watch?v=GA_YpQ9suJ8) video to see it in action.
 
-> Note that this software currently only works with standard 180Kb and 720Kb disk images (.dsk file with a size of 194,816 bytes). It also supports custom 4Mb and 8Mb disk images created with mkdsk (these cannot be used on a Gotek or emulator, but act like a networked hard drive).
+> Note that this software currently only works with standard 180Kb and 720Kb disk images. It also supports custom 4Mb and 8Mb disk images created with mkdsk (these cannot be used on a Gotek or emulator, but act like a networked hard drive).
 
 ## Building the server
 
