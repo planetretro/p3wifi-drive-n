@@ -4,7 +4,7 @@
 
 This code implements a disk image server + related Spectrum +3 client to access disk images over WiFi on the Spectrum +2A/+3(e). Once up and running, you'll have a new drive 'N:' in BASIC that can access files from a disk image on a remote machine.
 
-All the standard BASIC disk functions (`SAVE`, `LOAD`, `CAT`, `COPY` and `ERASE`) work, and the the +3 doesn't treat drive 'N:' any differently from drive 'A:' or 'B'.
+All the standard BASIC disk functions (`SAVE`, `LOAD`, `CAT`, `COPY` and `ERASE`) work, and the the +3 doesn't treat drive 'N:' any differently from drive 'A:' or 'B' (other than the fact that `FORMAT "N:"` will result in an `Invalid drive` error).
 
 See [this video](https://www.youtube.com/watch?v=A6ab68BPvUA) to see it in action.
 
