@@ -76,5 +76,3 @@ Values each format that will be needed in the XDPBs:
 - `CKS`: checksum vector size, = (DRM+1)/4. Can be set to 0 and the whole `chksm_a` buffer dropped since the drive is logically fixed - see `~/Documents/Development/spectrum/p3-custom-disk-geom.md` for rationale.
 - `OFF`: reserved tracks at the start of the disk. `1` for formats that mimic a bootable floppy, `0` for our custom non-bootable formats.
 - `SPT`: sectors per track, in 128-byte records (= sectors × 4 for 512-byte sectors).
-
-> **Spectrum-side XDPB integration is TBD** - see `~/Documents/Development/spectrum/p3-custom-disk-geom.md` for the broader design discussion of how the Spectrum side would select between formats at init.
