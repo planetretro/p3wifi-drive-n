@@ -6,7 +6,7 @@ This code implements a disk image server + related Spectrum +3 client to access 
 
 All the standard BASIC disk functions (`SAVE`, `LOAD`, `CAT`, `COPY` and `ERASE`) work, and the the +3 doesn't treat drive 'N:' any differently from drive 'A:' or 'B' (other than the fact that `FORMAT "N:"` will result in an `Invalid drive` error).
 
-See [this video](https://www.youtube.com/watch?v=A6ab68BPvUA) to see it in action.
+See [this](https://www.youtube.com/watch?v=A6ab68BPvUA) or [this](https://www.youtube.com/watch?v=GA_YpQ9suJ8) video to see it in action.
 
 > Note that this software currently only works with standard 180Kb and 720Kb disk images (.dsk file with a size of 194,816 bytes). It also supports custom 4Mb and 8Mb disk images created with mkdsk (these cannot be used on a Gotek or emulator, but act like a networked hard drive).
 
