@@ -226,6 +226,7 @@ waitPrompt:
     call    uartReadBlocking
     call    pushRing
     ld      hl, send_prompt
+    ld      b, send_prompt_len
     call    searchRing
     jr      nc, waitPrompt
     ret
