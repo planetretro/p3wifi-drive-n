@@ -2,13 +2,98 @@ loadSector:
     ld      hl, d_host
     ld      de, d_path
     ld      bc, d_port
-
-    push    ix
     call    openRequest
     call    sendTextData
     call    loadData
-    pop     ix
+    ret
 
+; Fetch the 27-byte XDPB (DPB + extended format fields) from the server.
+;   Entry: ddl_parms+6 already = $07; prepFloppyCmd already built d_path.
+;   Exit:  Z  = success; bytes 0..$1A of xdpb populated.
+;          NZ = failure; xdpb may be partially written.
+fetchGeom:
+    ; Stream the 27 raw bytes straight into the XDPB
+    ld      hl, xdpb
+    ld      (data_pointer), hl
+
+    ld      hl, d_host
+    ld      de, d_path
+    ld      bc, d_port
+    call    openRequest
+    call    sendTextData                ; 26-byte cmd via CIPSEND=26
+    call    loadData                    ; drains until CLOSED
+
+    ; data_pointer advanced by the number of bytes received.
+    ld      hl, (data_pointer)
+    ld      de, xdpb
+    or      a                           ; clear CF
+    sbc     hl, de                      ; HL = bytes received
+    ld      a, h
+    or      a
+    jr      nz, .fail                   ; > 255 ⇒ bogus
+    ld      a, l
+    cp      27
+    jr      nz, .fail                   ; need exactly 27
+
+    xor     a                           ; Z = success
+    ret
+
+.fail:
+    or      1                           ; NZ = failure
+    ret
+
+storeSector:
+    ; debug - yellow border
+    ld   a, 6
+    out  (-2), a
+    ; debug
+
+    ld      hl, d_host
+    ld      de, d_path
+    ld      bc, d_port
+
+    call    openRequest                 ; ends with uart write of "AT+CIPSEND="
+
+    ld      bc, 26 + 512                ; command + raw binary sector payload
+    call    openSendData                ; writes "538\r\n", waits for ">"
+    jr      nz, .fail
+
+    ld      hl, d_path                  ; 26-byte hex command (null-terminated)
+    call    uartWriteStringZ
+
+    ld      hl, (ddl_parms+1)           ; buffer start address
+    ld      bc, 512                     ; bytes to send
+1:
+    push    bc
+    push    hl
+
+    di
+    ld      a, (ddl_parms)              ; buffer bank
+    call    ram_page_in
+    ld      a, (hl)                     ; grab byte while bank is paged in
+    ld      d, a                        ; stash in D (survives ram_page_out)
+    call    ram_page_out
+    ei
+
+    ld      a, d
+    call    uartWriteByte               ; raw byte via UART
+
+    pop     hl
+    pop     bc
+    inc     hl
+    dec     bc
+    ld      a, b
+    or      c
+    jr      nz, 1B
+
+    call    closeSend                   ; trailing CRLF
+    call    dropData                    ; discard trailing packet data
+
+    xor     a                           ; Z = success
+    ret
+
+.fail:
+    or      1                           ; NZ = failure, caller takes cmd_fail
     ret
 
 ; HL - domain stringZ
@@ -55,6 +140,10 @@ reqErr:
     out     (-2), a
     ret
 
+dropData:
+    ld     hl, 0                     ; Flag to getPacket to discard remaining packet data
+    ld     (data_pointer), hl        ; by setting data_pointer to 0
+
 ; (ddl_params+0) = page to load data in to
 ; data_pointer = pointer to buffer, or 0 to throw away data
 loadData:
@@ -86,6 +175,7 @@ waitPrompt:
     call    uartReadBlocking
     call    pushRing
     ld      hl, send_prompt
+    ld      b, send_prompt_len
     call    searchRing
     jr      nc, waitPrompt
     ret
@@ -108,7 +198,7 @@ fstream         defb    0
 crlf            defb    13, 10, 0
 
 d_path          defs    32, 0
-d_host          defb    '192.168.7.164', 0
+d_host          defb    '192.168.1.50', 0
                 defs    32
 d_port          db      '7650', 0
                 defs    1
@@ -118,4 +208,3 @@ connectionOpen  db      0
 srv_ptr         dw  0
 path_ptr        dw  0
 port_ptr        dw  0
-

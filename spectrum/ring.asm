@@ -1,48 +1,28 @@
-; Pushes A to ring buffer
-pushRing
-    ld   c, a                           ; Save byte in A to C
-    ld   b, 32
-
-    ; Copy bytes in buffer down one position
+; Pushes A to ring buffer. LDIR doesn't touch A, so no need to stash it.
+; Clobbers F, BC, DE, HL (per LDIR semantics).
+pushRing:
     ld   hl, ring_buffer + 1
     ld   de, ring_buffer
-1:
-    ld   a, (hl)
-    ld   (de), a
-    inc  hl
-    inc  de
-    djnz 1B
-
-    ld   a, c                           ; Get byte back from C
-    ld   hl, ring_buffer + 31           ; Write byte to end of buffer
-    ld   (hl), a
+    ld   bc, 31
+    ldir
+    ld   (ring_buffer + 31), a
     ret
 
 ; Entry:
-;   HL: Search string (null terminated)
+;   HL: Search string
+;   B:  String length (not including terminator); caller precomputes
 ; Exit:
 ;   Fc: 1 Found
 ;       0 Not found
 searchRing:
-    push hl
+    ld   a, low(ring_buffer + 32)
+    sub  b
+    ld   e, a
+    ld   a, high(ring_buffer + 32)
+    sbc  a, 0
+    ld   d, a                           ; DE = ring_buffer + 32 - strlen
 
-    ld   b, 0
-    ld   de, ring_buffer + 32           ; Start at end of buffer
-
-strlen:
-    ld   a, (hl)                        ; Get the length of the string to compare
-    inc  hl                             ; Count bytes in B until we get to a 0
-    dec  de                             ; Move ring buffer search position back
-    inc  b
-    and  a
-    jp   nz, strlen
-
-    dec  b                              ; Don't count 0 string terminator
-    inc  de
-
-    pop  hl
-
-strcmp:                                 ; B = strlen (without 0 terminator)
+strcmp:
     ld   a, (de)
     cp   (hl)
     jp   nz, .failed
@@ -54,15 +34,6 @@ strcmp:                                 ; B = strlen (without 0 terminator)
 
 .failed
     xor  a
-    ret
-
-clearRing:
-    xor  a
-    ld   hl, ring_buffer
-    ld   de, ring_buffer + 1
-    ld   bc, 32
-    ld   (hl), a
-    ldir
     ret
 
 ring_buffer

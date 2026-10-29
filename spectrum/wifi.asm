@@ -117,12 +117,15 @@ okErrCmdLp
     call    pushRing
 
     ld      hl, response_ok
+    ld      b, response_ok_len
     call    searchRing
     jr      c, okErrOk
     ld      hl, response_err
+    ld      b, response_err_len
     call    searchRing
     jr      c, okErrErr
     ld      hl, response_fail
+    ld      b, response_fail_len
     call    searchRing
     jr      c, okErrErr
 
@@ -158,34 +161,25 @@ getPacket
     or      l
     jp      z, .dumpRead            ; If it is, then read the bytes but don't save them
 
-    ; This code is gnarly, with multiple stack operations and memory
-    ; pages. Be very careful editing it (speaking from experience),
-    ; as it's easy to mess up.
-
 .readByte
     push    bc
-    push    hl
     call    uartReadBlocking
 
     di
-
-    push    af
+    ex      af, af'
     ld      a, (ddl_parms)
     call    ram_page_in
-    pop     af
+    ex      af, af'
 
-    pop     hl
     pop     bc
 
     ld      (hl), a
     inc     hl
     dec     bc
 
-    push    bc
-    push    hl
+    exx
     call    ram_page_out
-    pop     hl
-    pop     bc
+    exx
 
     ld      a, b
     or      c
@@ -195,8 +189,7 @@ getPacket
     ei
     ret
 
-    ; Read bytes from the UART and throw them away until BC
-    ; bytes have been read
+    ; Read bytes from the UART and throw them away until BC bytes have been read
 
 .dumpRead
     push    bc
@@ -205,7 +198,7 @@ getPacket
     dec     bc
     ld      a, b
     or      c
-    jr      z, .dumpRead
+    jr      nz, .dumpRead
     ret
 
 .checkIpdStart
@@ -265,13 +258,17 @@ ipd         defb 13, 10, "+IPD,", 0
 response_rdy        defb 'ready', 0
 response_invalid    defb 'invalid', 0
 response_ok         defb 'OK', 13, 10, 0      ; Sucessful operation
+response_ok_len     equ $-response_ok-1
 response_err        defb 13, 10, 'ERROR', 13, 10, 0      ; Failed operation
+response_err_len    equ $-response_err-1
 response_fail       defb 13, 10, 'FAIL', 13, 10, 0       ; Failed connection to WiFi. For us same as ERROR
+response_fail_len   equ $-response_fail-1
 
 bytes_avail   defw 0
 sbyte_buff    defb 0, 0
 
-send_prompt defb ">",0
+send_prompt     defb ">",0
+send_prompt_len equ $-send_prompt-1
 
 loadingMsg:
     defb 0x16, 1, 0, "Loading WiFi config..."
@@ -280,4 +277,3 @@ loadingMsgLen: equ $-loadingMsg
 connectingMsg:
     defb 0x16, 1, 0, "Connecting...         "
 connectingMsgLen equ $-connectingMsg
-
