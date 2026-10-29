@@ -195,8 +195,7 @@ getPacket
     ei
     ret
 
-    ; Read bytes from the UART and throw them away until BC
-    ; bytes have been read
+    ; Read bytes from the UART and throw them away until BC bytes have been read
 
 .dumpRead
     push    bc
@@ -205,7 +204,7 @@ getPacket
     dec     bc
     ld      a, b
     or      c
-    jr      z, .dumpRead
+    jr      nz, .dumpRead
     ret
 
 .checkIpdStart
@@ -280,4 +279,3 @@ loadingMsgLen: equ $-loadingMsg
 connectingMsg:
     defb 0x16, 1, 0, "Connecting...         "
 connectingMsgLen equ $-connectingMsg
-

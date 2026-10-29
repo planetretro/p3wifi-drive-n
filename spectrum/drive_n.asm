@@ -19,7 +19,6 @@ disk_type:
     defb    0                       ; Disk type
 
 start2:
-
     ; Set up the stack and save HL' so we can return to BASIC
 
     di
@@ -118,8 +117,16 @@ read:
     jr   nz, cmd_fail
     jr   cmd_success
 
+; Same call / return registers as read
 write:
-    jr   cmd_fail
+    push ix
+    ld   a, 6
+    ld   (ddl_parms+$06), a             ; Write command
+    call prepFloppyCmd
+    call storeSector
+    pop  ix
+    jr   nz, cmd_fail
+    jr   cmd_success
 
 prepFloppyCmd:
     push hl
@@ -149,13 +156,11 @@ cmd_fail:
 
 exit:
     di
-    ld      sp, (old_sp)
+    ld      sp, (old_sp)                ; Restore SP
     exx
-    ld      hl, (temp_hl)
+    ld      hl, (temp_hl)               ; Restore HL' for BASIC
     exx
-
     call    restoreBorder
-
     ei
     ret
 
@@ -213,7 +218,21 @@ hexToBuf:
     ret
 
 xdpb:
-    defs $1b, 0
+    ; CP/M 2.2 Disk Parameter Block for +3 standard 180KB format.
+    ; Writing sectors needs this in place otherwise will hang. dd_sel_format
+    ; fills in the extended bytes.
+    defw    36                  ; +$00 SPT: 9 sectors × 4 = 36 128-byte records
+    defb    3                   ; +$02 BSH: block shift (block = 128 << 3 = 1024)
+    defb    7                   ; +$03 BLM: block mask
+    defb    0                   ; +$04 EXM: extent mask
+    defw    174                 ; +$05 DSM: max block number (175 blocks)
+    defw    63                  ; +$07 DRM: max directory entry (64 entries)
+    defb    $c0                 ; +$09 AL0: blocks 0+1 reserved for directory
+    defb    $00                 ; +$0a AL1
+    defb    16                  ; +$0b CKS LSB: checksum vector size (DRM+1)/4
+    defb    $80                 ; +$0c CKS MSB with bit 7 set to indicate fixed drive
+    defw    1                   ; +$0d OFF: reserved tracks (track 0 = boot)
+    defs    $1b - 15, 0         ; $0f-$1a: dd_sel_format writes $11-$19
 
 .l17f6
     defb    $00,'N',$00         ; flags,drive,unit - bit 2 CLEAR so +3DOS
