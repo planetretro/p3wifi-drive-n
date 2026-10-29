@@ -86,27 +86,6 @@ typedef struct {
 } DiskCommand;
 
 /**
- * Decode `len` ASCII hex chars from `hex` into `out`.
- * len must be even; returns 0 on success, -1 on bad char or odd length.
- */
-static int hex_to_bytes(const char *hex, size_t len, unsigned char *out) {
-    if (len & 1) return -1;
-    for (size_t i = 0; i < len; i += 2) {
-        unsigned int v = 0;
-        for (int n = 0; n < 2; n++) {
-            char c = hex[i + n];
-            v <<= 4;
-            if (c >= '0' && c <= '9')      v |= c - '0';
-            else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
-            else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
-            else return -1;
-        }
-        out[i / 2] = (unsigned char)v;
-    }
-    return 0;
-}
-
-/**
  * Parse ASCII hex string into disk command structure
  * Example input: "05 09 01 00 01 02 01 2A FF"
  * Returns 0 on success, -1 on error
@@ -406,32 +385,26 @@ void handle_client(int client_socket) {
         }
     }
     else if (cmd.ddCmd == 0x06) {
-        char hex_buf[1024];
         size_t have = 0;
 
         // The first recv() may have consumed some payload bytes past the
         // 26-byte command header; carry them forward.
         if (bytes_received > 26) {
             size_t extra = bytes_received - 26;
-            if (extra > sizeof(hex_buf)) extra = sizeof(hex_buf);
-            memcpy(hex_buf, recv_buffer + 26, extra);
+            if (extra > sizeof(sector_data)) extra = sizeof(sector_data);
+            memcpy(sector_data, recv_buffer + 26, extra);
             have = extra;
         }
 
-        // Pull the rest of the ASCII-hex payload off the socket.
-        while (have < sizeof(hex_buf)) {
-            ssize_t n = recv(client_socket, hex_buf + have,
-                             sizeof(hex_buf) - have, 0);
+        // Pull the rest of the raw 512-byte sector payload off the socket.
+        while (have < sizeof(sector_data)) {
+            ssize_t n = recv(client_socket, sector_data + have,
+                             sizeof(sector_data) - have, 0);
             if (n <= 0) {
                 perror("recv payload");
                 goto done;
             }
             have += n;
-        }
-
-        if (hex_to_bytes(hex_buf, sizeof(hex_buf), sector_data) != 0) {
-            fprintf(stderr, "Bad hex payload\n");
-            goto done;
         }
 
         if (verbosity == 1) {

@@ -105,15 +105,15 @@ storeSector:
 
     call    openRequest                 ; ends with uart write of "AT+CIPSEND="
 
-    ld      bc, 26 + 1024               ; command + hex-encoded sector payload
-    call    openSendData                ; writes "1050\r\n", waits for ">"
+    ld      bc, 26 + 512                ; command + raw binary sector payload
+    call    openSendData                ; writes "538\r\n", waits for ">"
     jr      nz, .fail
 
     ld      hl, d_path                  ; 26-byte hex command (null-terminated)
     call    uartWriteStringZ
 
     ld      hl, (ddl_parms+1)           ; buffer start address
-    ld      bc, 512                     ; bytes to encode (× 2 = 1024 chars)
+    ld      bc, 512                     ; bytes to send
 1:
     push    bc
     push    hl
@@ -127,7 +127,7 @@ storeSector:
     ei
 
     ld      a, d
-    call    sendHexByte                 ; 2 ASCII hex chars via UART
+    call    uartWriteByte               ; raw byte via UART
 
     pop     hl
     pop     bc
@@ -146,25 +146,6 @@ storeSector:
 .fail:
     or      1                           ; NZ = failure, caller takes cmd_fail
     ret
-
-; A = byte; writes high nibble then low nibble as ASCII hex via UART.
-sendHexByte:
-    push    af                          ; save raw byte for second nibble
-    rra
-    rra
-    rra
-    rra
-    call    .nibble                     ; write high nibble
-    pop     af
-    jp      .nibble                     ; tail: write low nibble
-
-.nibble:
-    and     0x0f
-    add     a, 0x90
-    daa
-    adc     a, 0x40
-    daa
-    jp      uartWriteByte               ; tail: UART write returns to caller
 
 ; HL - domain stringZ
 ; DE - path stringZ
