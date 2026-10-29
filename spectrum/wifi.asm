@@ -164,7 +164,6 @@ getPacket
 
 .readByte
     push    bc
-    push    hl
     call    uartReadBlocking
 
     di
@@ -174,7 +173,6 @@ getPacket
     call    ram_page_in
     pop     af
 
-    pop     hl
     pop     bc
 
     ld      (hl), a

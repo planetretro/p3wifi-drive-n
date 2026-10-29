@@ -89,10 +89,6 @@ txLoop:
 
 uartReadBlocking:
     di
-
-    xor  a                      ; Reset read error count
-    ld   (readErrors), a
-
     ld   bc, 0xFFD              ; 10T   printer port to BC
 
 ; Check that RX is idle
@@ -189,4 +185,3 @@ readErrors:
 ; total 24 + 29 = 53T
 ; including line status detection, 75T with verification before start bit
 ; otherwise, you can directly wait for the next start bit
-
