@@ -18,7 +18,8 @@
 #define MAX_ALLOC_BYTES   128    // alloc bitmap ceiling (B); decides BSH
 #define DIR_ENTRIES_MIN    64    // directory entries
 
-static int debug = 0;
+// 0 = silent (-q), 1 = default (startup + \r Read/Write), 2 = -v (per-request), 3 = -vv (debug dumps).
+static int verbosity = 1;
 
 DSK_PDRIVER driver = NULL;
 
@@ -135,7 +136,7 @@ int parse_command(const char *input, DiskCommand *cmd) {
             return -1;
         }
 
-        printf("%02x ", values[count]);
+        if (verbosity >= 2) printf("%02x ", values[count]);
 
         count++;
 
@@ -143,7 +144,7 @@ int parse_command(const char *input, DiskCommand *cmd) {
         token = strtok(NULL, " ");
     }
 
-    printf("\n");
+    if (verbosity >= 2) printf("\n");
 
     // Check if we got exactly 9 values (or at least 9)
     if (count < 9) {
@@ -243,7 +244,7 @@ int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, uint8_t out[27]) {
     out[0x0F] = (uint8_t)psh;
     out[0x10] = (uint8_t)phm;
     /* +3DOS sidedness byte: $00 single, $01 ALT, $81 successive. Single-sided
-     * drives MUST be $00 — otherwise l1bb5 does ALT translation and the
+     * drives MUST be $00 - otherwise l1bb5 does ALT translation and the
      * side bit gets ORed into the unit byte on every access. */
     if (g->dg_heads < 2)                   out[0x11] = 0x00;
     else if (g->dg_sidedness == SIDES_ALT) out[0x11] = 0x01;
@@ -286,7 +287,7 @@ void handle_client(int client_socket) {
                          BUFFER_SIZE - 1 - bytes_received, 0);
         if (n <= 0) {
             if (n == 0) {
-                printf("Client disconnected\n");
+                if (verbosity >= 2) printf("Client disconnected\n");
             } else {
                 perror("recv failed");
             }
@@ -297,28 +298,28 @@ void handle_client(int client_socket) {
     }
 
     recv_buffer[bytes_received] = '\0';
-    printf("Received %zd bytes\n", bytes_received);
+    if (verbosity >= 2) printf("Received %zd bytes\n", bytes_received);
 
     // Parse the command
     if (parse_command(recv_buffer, &cmd) != 0) {
-        printf("Error parsing command\n");
+        fprintf(stderr, "Error parsing command\n");
         close(client_socket);
         return;
     }
 
     // Display parsed command
-    if (debug) {
+    if (verbosity >= 3) {
         printf("Parsed command:\n");
-        printf("  ddCmd: 0x%02X\n", cmd.ddCmd);
-        printf("  ddUnit: 0x%02X\n", cmd.ddUnit);
-        printf("  ddTrack: %d\n", cmd.ddTrack);
-        printf("  ddSide: %d\n", cmd.ddSide);
-        printf("  ddStartSec: %d\n", cmd.ddStartSec);
-        printf("  ddSize: 0x%02X\n", cmd.ddSize);
-        printf("  ddEndSec: %d\n", cmd.ddEndSec);
-        printf("  ddGap: 0x%02X\n", cmd.ddGap);
-        printf("  ddLen: 0x%02X\n", cmd.ddLen);
-        printf("  ddHead: %d\n", cmd.ddHead);
+        printf("  %-11s 0x%02X\n", "ddCmd:",      cmd.ddCmd);
+        printf("  %-11s 0x%02X\n", "ddUnit:",     cmd.ddUnit);
+        printf("  %-11s %d\n",     "ddTrack:",    cmd.ddTrack);
+        printf("  %-11s %d\n",     "ddSide:",     cmd.ddSide);
+        printf("  %-11s %d\n",     "ddStartSec:", cmd.ddStartSec);
+        printf("  %-11s 0x%02X\n", "ddSize:",     cmd.ddSize);
+        printf("  %-11s %d\n",     "ddEndSec:",   cmd.ddEndSec);
+        printf("  %-11s 0x%02X\n", "ddGap:",      cmd.ddGap);
+        printf("  %-11s 0x%02X\n", "ddLen:",      cmd.ddLen);
+        printf("  %-11s %d\n",     "ddHead:",     cmd.ddHead);
     }
 
     // Get XDPB (login handshake)
@@ -338,7 +339,7 @@ void handle_client(int client_socket) {
         }
         hex[54] = '\0';
 
-        printf(" Geom: %s\n", hex);
+        if (verbosity >= 2) printf(" Geom: %s\n", hex);
 
         /* 54 ASCII hex chars = 27 XDPB bytes. Loop send for ESP compatibility. */
         ssize_t sent = 0;
@@ -353,12 +354,19 @@ void handle_client(int client_socket) {
     // Read sector from disk
     if (cmd.ddCmd == 0x05) {
         memset(sector_data, 0, sizeof(sector_data));
-        printf(" Read: Track %d, Sector %d, Head %d\n", cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+        if (verbosity == 1) {
+            printf("\rRead:  Track %3d, Sector %2d, Head %d   ",
+                   cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+            fflush(stdout);
+        } else if (verbosity >= 2) {
+            printf(" Read: Track %d, Sector %d, Head %d\n",
+                   cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+        }
 
         result = dsk_pread(driver, &geom, sector_data, cmd.ddTrack, cmd.ddHead, cmd.ddStartSec);
 
         if (result != DSK_ERR_OK) {
-            printf("Error reading sector: %d\n", result);
+            fprintf(stderr, "Error reading sector: %d\n", result);
             close(client_socket);
             return;
         }
@@ -376,7 +384,7 @@ void handle_client(int client_socket) {
 
             total_sent += bytes_sent;
 
-            if (debug) {
+            if (verbosity >= 3) {
                 printf("Sent %zd bytes (total: %zd/512)\n", bytes_sent, total_sent);
             }
         }
@@ -410,8 +418,14 @@ void handle_client(int client_socket) {
             goto done;
         }
 
-        printf("Write: Track %d, Sector %d, Head %d\n",
-               cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+        if (verbosity == 1) {
+            printf("\rWrite: Track %3d, Sector %2d, Head %d   ",
+                   cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+            fflush(stdout);
+        } else if (verbosity >= 2) {
+            printf("Write: Track %d, Sector %d, Head %d\n",
+                   cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+        }
 
         result = dsk_pwrite(driver, &geom, sector_data,
                             cmd.ddTrack, cmd.ddHead, cmd.ddStartSec);
@@ -483,9 +497,11 @@ int start_server(void) {
             continue;
         }
 
-        printf("\nClient connected from %s:%d\n",
-               inet_ntoa(client_addr.sin_addr),
-               ntohs(client_addr.sin_port));
+        if (verbosity >= 2) {
+            printf("\nClient connected from %s:%d\n",
+                   inet_ntoa(client_addr.sin_addr),
+                   ntohs(client_addr.sin_port));
+        }
 
         handle_client(client_socket);
     }
@@ -531,7 +547,9 @@ static void usage(FILE *out, const char *progname) {
     for (size_t i = 0; i < NGEOMETRIES; i++) {
         fprintf(out, "%s%s", i ? ", " : "", GEOMETRIES[i].name);
     }
-    fprintf(out, "\n  -d          Enable debug output\n");
+    fprintf(out, "\n  -q          Quiet: no output\n");
+    fprintf(out, "  -v          Verbose: per-request log\n");
+    fprintf(out, "  -vv         Debug: adds parsed-command dump and send chunks\n");
     fprintf(out, "  -h          Show this help\n");
 }
 
@@ -541,10 +559,10 @@ static void usage(FILE *out, const char *progname) {
 int main(int argc, char *argv[]) {
     dsk_err_t result;
     const char *disk_image_path;
-    const named_geom_t *chosen = NULL;             /* NULL = infer from size */
+    const named_geom_t *chosen = NULL; // NULL = infer from size
     int opt;
 
-    while ((opt = getopt(argc, argv, "f:dh")) != -1) {
+    while ((opt = getopt(argc, argv, "f:vqh")) != -1) {
         switch (opt) {
             case 'f':
                 chosen = lookup_geometry(optarg);
@@ -554,10 +572,17 @@ int main(int argc, char *argv[]) {
                     return 1;
                 }
                 break;
-            case 'd': debug = 1; break;
+            case 'v': verbosity++; break;
+            case 'q': verbosity = 0; break;
             case 'h': usage(stdout, argv[0]); return 0;
             default:  usage(stderr, argv[0]); return 1;
         }
+    }
+
+    /* -q: no output including perror and fatal errors. */
+    if (verbosity == 0) {
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
     }
 
     if (optind >= argc) {
