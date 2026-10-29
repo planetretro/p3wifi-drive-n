@@ -31,13 +31,13 @@ start2:
 
     ; Load WiFi config + init ESP
 
-    ld   a, (wifiConnected)
+    ld   a, (wifiConnected)         ; Skip connect if already connected
     or   a
     jr   nz, 1F
 
     call loadWiFiConfig
     call initWiFi
-    ld   a, 1                           ; Flag wifi as connected
+    ld   a, 1                       ; Flag wifi as connected
     ld   (wifiConnected), a
 
 1:
@@ -60,31 +60,17 @@ start2:
     call    ram_page_out
     ei
 
-    ; Zero the DPB + format fields of the XDPB so the next access forces a
-    ; fresh server-side geometry fetch via our login hook. Belt-and-braces
-    ; against RAM state surviving a soft re-run of driven.bin.
-    ld      hl, xdpb
-    ld      de, xdpb+1
-    ld      bc, $1b
+    ld      hl, xdpb                ; Zero XDPB in case of being called
+    ld      de, xdpb+1              ; again from BASIC
+    ld      bc, $1c
     ld      (hl), 0
     ldir
 
-    ; Clear bit 0 of (xdpb+$1b) — the "drive logged in" flag that +3DOS
-    ; sets after our login hook succeeds. Without this, a re-run (GOTO 30
-    ; from the loader) sees stale "logged in" state, skips the login hook,
-    ; and reads from the zeroed DPB with nonsense geometry.
-    ld      hl, xdpb+$1b
-    res     0, (hl)
-
     jp      exit
 
-; dd_login entry conditions (p3dos.asm:2046-2070) are only C=Unit, IX=XDPB.
-; HL/DE/BC are "corrupt" - not meaningful track/sector/buffer values. So we
-; must NOT run prepFloppyCmd here (that does logical→physical translation
-; against D/E and would scribble garbage into the command block).
-;
-; Just build a flat 9-byte command: cmd=$07, every other byte zero. The
-; server's 0x07 branch ignores the rest of the block, so zeros are fine.
+; dd_login - command: cmd=$07, every other byte zero. Server ignores
+; non-command bytes
+
 login:
     push    ix
 
@@ -94,7 +80,8 @@ login:
     ld      bc, 8
     ld      (hl), 0
     ldir
-    ld      a, 7
+
+    ld      a, 7                     ; disk geom command
     ld      (ddl_parms+6), a
 
     call    floppyCmdToString        ; → 26-byte ASCII hex in d_path
