@@ -1,7 +1,5 @@
 # +3WiFi - Disk Server
 
-> WARNING: This branch contains beta code that has not been tested as thoroughly as the code in the main branch. Don't use it to save data over the network to disk images that you don't have backed up! Although it works for me, I accept no responsibility if it mangles your data!
-
 This code implements a disk image server + related Spectrum +3 client to access disk images over WiFi on the Spectrum +3.
 
 > A +3WiFi card from [Planet Retro](https://planet-retro.co.uk) is required for this software to work. It's entirely possible to swap out the ESP-12 code for another driver to use an ESP-12 connected to the AY chip etc.
