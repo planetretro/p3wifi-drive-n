@@ -1,18 +1,18 @@
 # +3WiFi - Disk Server
 
-This code implements a disk image server + related Spectrum +3 client to access disk images over WiFi on the Spectrum +3.
-
 > A +3WiFi card from [Planet Retro](https://planet-retro.co.uk) is required for this software to work. It's entirely possible to swap out the ESP-12 code for another driver to use an ESP-12 connected to the AY chip etc.
 
-Once up and running, you'll have a new drive 'N:' in BASIC that can access files from a disk image on a remote machine.
+This code implements a disk image server + related Spectrum +3 client to access disk images over WiFi on the Spectrum +2A/+3(e). Once up and running, you'll have a new drive 'N:' in BASIC that can access files from a disk image on a remote machine.
+
+All the standard BASIC disk functions (`SAVE`, `LOAD`, `CAT`, `COPY` and `ERASE`) work, and the the +3 doesn't treat drive 'N:' any differently from drive 'A:' or 'B'.
 
 See [this video](https://www.youtube.com/watch?v=A6ab68BPvUA) to see it in action.
 
-> Note that this software currently only works with standard 180Kb disk images (.dsk file with a size of 194,816 bytes)
+> Note that this software currently only works with standard 180Kb and 720Kb disk images (.dsk file with a size of 194,816 bytes). It also supports custom 4Mb and 8Mb disk images created with mkdsk (these cannot be used on a Gotek or emulator, but act like a networked hard drive).
 
 ## Building the server
 
-> The server has only been tested by me on Linux and macOS. I don't use Windows but have been told by some users that they have managed to compile and run it using WSL. As such I won't be able to deal with any Windows support requests, but it does work - you're just on your own if using it on Windows.
+> The server has only been tested by me on Linux and macOS. It can also be compiled and run on Windows using WSL. I don't run Windows, so won't be able to deal with any Windows support requests.
 
 You'll need libdsk installed on your machine to build the server.
 
