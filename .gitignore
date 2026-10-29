@@ -3,3 +3,5 @@ spectrum/*.bin
 dskserver/*.o
 dskserver/dskserver
 .DS_Store
+tools/mkdsk/mkdsk.o
+tools/mkdsk/mkdsk

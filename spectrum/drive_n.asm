@@ -61,16 +61,46 @@ start2:
     call    ram_page_out
     ei
 
-    ld      ix, xdpb
-    ld      a, (disk_type)          ; 0 = Standard +3 format disk
-    ld      hl, exit
-    push    hl
-    ld      hl, dd_sel_format
-    push    hl
-    jp      dos_tos
+    ; Zero the DPB + format fields of the XDPB so the next access forces a
+    ; fresh server-side geometry fetch via our login hook. Belt-and-braces
+    ; against RAM state surviving a soft re-run of driven.bin.
+    ld      hl, xdpb
+    ld      de, xdpb+1
+    ld      bc, $1b
+    ld      (hl), 0
+    ldir
 
+    jp      exit
+
+; dd_login entry conditions (p3dos.asm:2046-2070) are only C=Unit, IX=XDPB.
+; HL/DE/BC are "corrupt" - not meaningful track/sector/buffer values. So we
+; must NOT run prepFloppyCmd here (that does logical→physical translation
+; against D/E and would scribble garbage into the command block).
+;
+; Just build a flat 9-byte command: cmd=$07, every other byte zero. The
+; server's 0x07 branch ignores the rest of the block, so zeros are fine.
 login:
-    jp      cmd_success
+    push    ix
+
+    ; Zero ddl_parms+6..+$0E, then stamp the command byte.
+    ld      hl, ddl_parms+6
+    ld      de, ddl_parms+7
+    ld      bc, 8
+    ld      (hl), 0
+    ldir
+    ld      a, 7
+    ld      (ddl_parms+6), a
+
+    call    floppyCmdToString        ; → 26-byte ASCII hex in d_path
+    call    fetchGeom                ; populates (xdpb+0)..(xdpb+$1A)
+    pop     ix
+    jr      nz, .fail
+    jr      cmd_success
+.fail:
+    call    restoreBorder
+    ld      a, $06                   ; "Bad format" - matches A: login's convention
+    or      a                        ; CF=0 = failure
+    ret
 
 ;    B = Page for C000h (49152)...FFFFh (65535)
 ;    C = Unit (0/1)
@@ -79,10 +109,12 @@ login:
 ;   HL = Address of buffer
 ;   IX = Address of XDPB
 read:
+    push ix
     ld   a, 5
     ld   (ddl_parms+$06), a             ; Read command
     call prepFloppyCmd
     call loadSector
+    pop  ix
     jr   nz, cmd_fail
     jr   cmd_success
 
@@ -184,7 +216,9 @@ xdpb:
     defs $1b, 0
 
 .l17f6
-    defb    $04,'N',$00         ; flags,drive,unit
+    defb    $00,'N',$00         ; flags,drive,unit - bit 2 CLEAR so +3DOS
+                                ; doesn't probe the (non-existent) FDC for
+                                ; write-protect status during SAVE
     defb    $00,$00,$00,$00     ; last access,filesopen
     defw    $0000,$0000         ; #free direntries,last used
     defw    chksm_a,alloc_a     ; checksum vector,alloc bitmap
@@ -450,4 +484,3 @@ end:
 
     save3dos "build/driven.bin", start, end-start   ; Version for build disk
     savebin  "drive_n.bin", start, end-start        ; Version for loading directly to RAM
-

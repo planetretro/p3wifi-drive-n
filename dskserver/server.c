@@ -1,34 +1,63 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include "libdsk.h"
 
+// Server config
 #define PORT 7650
 #define BUFFER_SIZE 1024
 
+// Config for build_xdpb
+#define MAX_ALLOC_BYTES   128    // alloc bitmap ceiling (B); decides BSH
+#define DIR_ENTRIES_MIN    64    // directory entries
+
 static int debug = 0;
 
-// Disk driver and geometry globals
 DSK_PDRIVER driver = NULL;
-DSK_GEOMETRY geom = {
-    .dg_sidedness = SIDES_ALT,
-    .dg_cylinders = 40,
-    .dg_heads = 1,
-    .dg_sectors = 9,
-    .dg_secbase = 1,
-    .dg_secsize = 512,
-    .dg_datarate = RATE_SD,
-    .dg_rwgap = 42,
-    .dg_fmtgap = 82,
-    .dg_fm = RECMODE_MFM,
-    .dg_nomulti = 0,
-    .dg_noskip = 0
+
+typedef struct {
+    const char   *name;
+    DSK_GEOMETRY  g;
+} named_geom_t;
+
+// Supported disk geometries
+static const named_geom_t GEOMETRIES[] = {
+    { "180K", {
+        .dg_sidedness = SIDES_ALT, .dg_cylinders = 40,  .dg_heads = 1, .dg_sectors = 9,
+        .dg_secbase   = 1,         .dg_secsize   = 512,
+        .dg_datarate  = RATE_SD,   .dg_rwgap     = 42,  .dg_fmtgap = 82,
+        .dg_fm        = RECMODE_MFM
+    }},
+    { "720K", {
+        .dg_sidedness = SIDES_ALT, .dg_cylinders = 80,  .dg_heads = 2, .dg_sectors = 9,
+        .dg_secbase   = 1,         .dg_secsize   = 512,
+        .dg_datarate  = RATE_SD,   .dg_rwgap     = 42,  .dg_fmtgap = 82,
+        .dg_fm        = RECMODE_MFM
+    }},
+    { "4M", {
+        .dg_sidedness = SIDES_ALT, .dg_cylinders = 128, .dg_heads = 2, .dg_sectors = 32,
+        .dg_secbase   = 1,         .dg_secsize   = 512,
+        .dg_datarate  = RATE_HD,   .dg_rwgap     = 42,  .dg_fmtgap = 82,
+        .dg_fm        = RECMODE_MFM
+    }},
+    { "8M", {
+        .dg_sidedness = SIDES_ALT, .dg_cylinders = 128, .dg_heads = 2, .dg_sectors = 64,
+        .dg_secbase   = 1,         .dg_secsize   = 512,
+        .dg_datarate  = RATE_ED,   .dg_rwgap     = 42,  .dg_fmtgap = 82,
+        .dg_fm        = RECMODE_MFM
+    }},
 };
+#define NGEOMETRIES (sizeof(GEOMETRIES) / sizeof(GEOMETRIES[0]))
+
+// Current geometry
+DSK_GEOMETRY geom;
 
 // Command structure
 typedef struct {
@@ -112,9 +141,97 @@ int parse_command(const char *input, DiskCommand *cmd) {
     cmd->ddGap = (unsigned char)values[7];
     cmd->ddLen = (unsigned char)values[8];
 
-    // Extract head from unit byte (bit 2)
-    // Always 0 for now
-    cmd->ddHead = 0 ; //(cmd->ddUnit & 0x04) ? 1 : 0;
+    // drive_n.asm:l1bd4 shifts the physical side bit twice before ORing into
+    // the unit byte, landing it at bit 2. Required for 2-head geometries.
+    cmd->ddHead = (cmd->ddUnit & 0x04) ? 1 : 0;
+
+    return 0;
+}
+
+/**
+ * Compute 27 XDPB bytes (CP/M DPB + +3DOS extended format fields) from the
+ * current libdsk geometry. Fields are packed in XDPB offset order so the
+ * Spectrum can `ld (hl), a : inc hl` straight into its XDPB.
+ *
+ * Returns 0 on success, non-zero if no BSH 3..7 keeps the alloc bitmap under
+ * MAX_ALLOC_BYTES (which only happens for implausibly large disks).
+ */
+int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, uint8_t out[27]) {
+    /* --- Physical geometry straight from libdsk --- */
+    unsigned ss = (unsigned)g->dg_secsize;
+    int psh = 0;
+    while (ss > 128) { ss >>= 1; psh++; }           /* log2(secsize/128)      */
+    int phm = (1 << psh) - 1;
+    int spt = (int)(g->dg_sectors * (g->dg_secsize / 128));
+
+    /* --- CP/M DPB policy --- */
+    int off = (capacity <= 1024u * 1024u) ? 1 : 0;
+    size_t reserved = (size_t)off * g->dg_heads * g->dg_sectors * g->dg_secsize;
+    if (reserved >= capacity) return -1;
+    size_t data_bytes = capacity - reserved;
+
+    int bsh = -1;
+    size_t block = 0, blocks = 0;
+    for (int b = 3; b <= 7; b++) {
+        size_t cand_block  = 128UL << b;
+        size_t cand_blocks = data_bytes / cand_block;
+        if (cand_blocks == 0) continue;
+        /* CP/M 2.2 constraint: DSM ≥ 256 forces 2-byte block pointers in
+         * directory entries, which requires BSH ≥ 4 (block ≥ 2 KB) so that
+         * one 16 KB extent still fits in the 8 pointers of one entry.
+         * Skip BSH=3 when the resulting DSM would exceed 255. */
+        if (cand_blocks > 256 && b < 4) continue;
+        size_t cand_alloc  = (cand_blocks + 7) / 8;
+        if (cand_alloc <= MAX_ALLOC_BYTES) {
+            bsh = b; block = cand_block; blocks = cand_blocks;
+            break;
+        }
+    }
+    if (bsh < 0) return -2;
+
+    int dsm = (int)(blocks - 1);
+    int blm = (1 << bsh) - 1;
+    int exm = (dsm < 256)
+            ? ((1 << (bsh - 3)) - 1)
+            : ((1 << (bsh - 4)) - 1);
+
+    size_t entries_per_block = block / 32;
+    int dir_blocks = (int)((DIR_ENTRIES_MIN + entries_per_block - 1) / entries_per_block);
+    if (dir_blocks < 1) dir_blocks = 1;
+    int entries = dir_blocks * (int)entries_per_block;
+    int drm = entries - 1;
+    int al0 = ((1 << dir_blocks) - 1) << (8 - dir_blocks);  /* $80, $C0, $E0 */
+    int al1 = 0;
+    int cks = (drm + 1) / 4;
+
+    /* --- Pack bytes in XDPB offset order --- */
+    out[0x00] = spt & 0xff;
+    out[0x01] = (spt >> 8) & 0xff;
+    out[0x02] = (uint8_t)bsh;
+    out[0x03] = (uint8_t)blm;
+    out[0x04] = (uint8_t)exm;
+    out[0x05] = dsm & 0xff;
+    out[0x06] = (dsm >> 8) & 0xff;
+    out[0x07] = drm & 0xff;
+    out[0x08] = (drm >> 8) & 0xff;
+    out[0x09] = (uint8_t)al0;
+    out[0x0A] = (uint8_t)al1;
+    out[0x0B] = cks & 0xff;
+    out[0x0C] = ((cks >> 8) & 0x7f) | 0x80;         /* bit 7 = fixed drive   */
+    out[0x0D] = off & 0xff;
+    out[0x0E] = (off >> 8) & 0xff;
+    out[0x0F] = (uint8_t)psh;
+    out[0x10] = (uint8_t)phm;
+    out[0x11] = (g->dg_sidedness == SIDES_ALT) ? 0x01 : 0x00;
+    out[0x12] = (uint8_t)g->dg_cylinders;
+    out[0x13] = (uint8_t)g->dg_sectors;
+    out[0x14] = (uint8_t)g->dg_secbase;
+    out[0x15] = g->dg_secsize & 0xff;
+    out[0x16] = (g->dg_secsize >> 8) & 0xff;
+    out[0x17] = (uint8_t)g->dg_rwgap;
+    out[0x18] = (uint8_t)g->dg_fmtgap;
+    out[0x19] = 0x60;                                /* match dd_sel_format   */
+    out[0x1A] = 0x00;
 
     return 0;
 }
@@ -173,8 +290,37 @@ void handle_client(int client_socket) {
         printf("  ddHead: %d\n", cmd.ddHead);
     }
 
+    // Get XDPB (login handshake)
+    if (cmd.ddCmd == 0x07) {
+        uint8_t xdpb[27];
+        size_t cap = (size_t)geom.dg_cylinders * geom.dg_heads
+                   * geom.dg_sectors * geom.dg_secsize;
+
+        if (build_xdpb(&geom, cap, xdpb) != 0) {
+            fprintf(stderr, "build_xdpb failed for capacity %zu bytes\n", cap);
+            goto done;   /* close without sending → Spectrum login bails */
+        }
+
+        char hex[55];
+        for (int i = 0; i < 27; i++) {
+            sprintf(hex + i * 2, "%02X", xdpb[i]);
+        }
+        hex[54] = '\0';
+
+        printf(" Geom: %s\n", hex);
+
+        /* 54 ASCII hex chars = 27 XDPB bytes. Loop send for ESP compatibility. */
+        ssize_t sent = 0;
+        while (sent < 54) {
+            ssize_t n = send(client_socket, hex + sent, 54 - sent, 0);
+            if (n < 0) { perror("send geom"); goto done; }
+            sent += n;
+        }
+        goto done;
+    }
+
     // Read sector from disk
-    if (1 || cmd.ddCmd == 0x05) {
+    if (cmd.ddCmd == 0x05) {
         memset(sector_data, 0, sizeof(sector_data));
         printf(" Read: Track %d, Sector %d, Head %d\n", cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
 
@@ -282,47 +428,127 @@ int start_server(void) {
     return 0;
 }
 
+static const named_geom_t *lookup_geometry(const char *name) {
+    for (size_t i = 0; i < NGEOMETRIES; i++) {
+        if (strcasecmp(GEOMETRIES[i].name, name) == 0) {
+            return &GEOMETRIES[i];
+        }
+    }
+    return NULL;
+}
+
+/* Match a file size against the GEOMETRIES[] table. mkdsk writes small formats
+ * as CPCEMU .dsk containers (256 B disk header + 256 B track info per track)
+ * and large formats as raw. We accept either size per entry. Returns NULL if
+ * no row matches - caller should then require -f. */
+static const named_geom_t *infer_geometry(off_t file_size) {
+    for (size_t i = 0; i < NGEOMETRIES; i++) {
+        const DSK_GEOMETRY *g = &GEOMETRIES[i].g;
+        off_t tracks = (off_t)g->dg_cylinders * g->dg_heads;
+        off_t raw_size = tracks * g->dg_sectors * g->dg_secsize;
+        off_t dsk_size = 256 + tracks * (256 + g->dg_sectors * g->dg_secsize);
+        if (file_size == raw_size || file_size == dsk_size) {
+            return &GEOMETRIES[i];
+        }
+    }
+    return NULL;
+}
+
+static void usage(FILE *out, const char *progname) {
+    fprintf(out,
+        "Usage: %s [-f FORMAT] <disk_image>\n"
+        "\n"
+        "If -f is omitted, the format is inferred from the file size.\n"
+        "\n"
+        "Options:\n"
+        "  -f FORMAT   Disk geometry: ", progname);
+    for (size_t i = 0; i < NGEOMETRIES; i++) {
+        fprintf(out, "%s%s", i ? ", " : "", GEOMETRIES[i].name);
+    }
+    fprintf(out, "\n  -d          Enable debug output\n");
+    fprintf(out, "  -h          Show this help\n");
+}
+
 /**
  * Main entry point
  */
 int main(int argc, char *argv[]) {
     dsk_err_t result;
     const char *disk_image_path;
+    const named_geom_t *chosen = NULL;             /* NULL = infer from size */
+    int opt;
 
-    // Check command line arguments
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <disk_image>\n", argv[0]);
-        fprintf(stderr, "Example: %s prtwifi.dsk\n", argv[0]);
-        return 1;
+    while ((opt = getopt(argc, argv, "f:dh")) != -1) {
+        switch (opt) {
+            case 'f':
+                chosen = lookup_geometry(optarg);
+                if (!chosen) {
+                    fprintf(stderr, "error: unknown format '%s'\n\n", optarg);
+                    usage(stderr, argv[0]);
+                    return 1;
+                }
+                break;
+            case 'd': debug = 1; break;
+            case 'h': usage(stdout, argv[0]); return 0;
+            default:  usage(stderr, argv[0]); return 1;
+        }
     }
 
-    disk_image_path = argv[1];
+    if (optind >= argc) {
+        fprintf(stderr, "error: no disk image specified\n\n");
+        usage(stderr, argv[0]);
+        return 1;
+    }
+    disk_image_path = argv[optind];
+
+    /* If -f wasn't given, infer the format from the file size. mkdsk's raw
+     * images are exactly cyl × heads × sectors × secsize bytes; its .dsk
+     * images add 256-byte disk and per-track headers. We check both. */
+    if (!chosen) {
+        struct stat st;
+        if (stat(disk_image_path, &st) != 0) {
+            perror(disk_image_path);
+            return 1;
+        }
+
+        chosen = infer_geometry(st.st_size);
+
+        if (!chosen) {
+            fprintf(stderr,
+                "error: can't infer disk format from file size (%lld bytes); "
+                "specify one with -f.\n\n", (long long)st.st_size);
+            usage(stderr, argv[0]);
+            return 1;
+        }
+    }
+
+    /* Copy the chosen geometry into the live `geom` global. All subsequent
+     * dsk_pread / dsk_pwrite / build_xdpb calls use this. */
+    geom = chosen->g;
 
     // Open disk image
     result = dsk_open(&driver, disk_image_path, NULL, NULL);
+
+    // Fallback to 'raw' type for custom disk images
+    if (result != DSK_ERR_OK) {
+        result = dsk_open(&driver, disk_image_path, "raw", NULL);
+    }
 
     if (result != DSK_ERR_OK) {
         fprintf(stderr, "Failed to open disk image: %s\n", disk_image_path);
         return 1;
     }
 
-    // Get disk geometry
-    result = dsk_getgeom(driver, &geom);
-
-    if (result != DSK_ERR_OK) {
-        fprintf(stderr, "Failed to get disk geometry\n");
-        dsk_close(&driver);
-        return 1;
-    }
-
-    printf("Disk image opened: %s\n", disk_image_path);
+    /* We DO NOT call dsk_getgeom here. libdsk can't infer geometry from the
+     * 0xE5-filled files mkdsk produces */
+    printf("Disk image opened: %s (format %s)\n", disk_image_path, chosen->name);
     printf("Geometry: %d cylinders, %d heads, %d sectors, %zu bytes/sector\n",
            geom.dg_cylinders, geom.dg_heads, geom.dg_sectors, geom.dg_secsize);
 
     // Start server
     start_server();
 
-    // Cleanup (unreachable in current implementation due to infinite loop)
+    // Cleanup
     dsk_close(&driver);
 
     return 0;
