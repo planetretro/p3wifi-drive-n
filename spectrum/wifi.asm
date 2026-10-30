@@ -120,10 +120,12 @@ okErrCmdLp
     ld      b, response_ok_len
     call    searchRing
     jr      c, okErrOk
+
     ld      hl, response_err
     ld      b, response_err_len
     call    searchRing
     jr      c, okErrErr
+
     ld      hl, response_fail
     ld      b, response_fail_len
     call    searchRing

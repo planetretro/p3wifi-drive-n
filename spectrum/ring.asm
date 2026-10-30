@@ -1,5 +1,9 @@
-; Pushes A to ring buffer. LDIR doesn't touch A, so no need to stash it.
-; Clobbers F, BC, DE, HL (per LDIR semantics).
+; Push value to ring buffer
+;
+; Entry:
+;   A:  Value to push to buffer
+; Exit:
+;   HL, DE, BC: Corrupt
 pushRing:
     ld   hl, ring_buffer + 1
     ld   de, ring_buffer
@@ -8,9 +12,11 @@ pushRing:
     ld   (ring_buffer + 31), a
     ret
 
+; Search for string in buffer
+;
 ; Entry:
 ;   HL: Search string
-;   B:  String length (not including terminator); caller precomputes
+;   B:  String length (not including terminator)
 ; Exit:
 ;   Fc: 1 Found
 ;       0 Not found

@@ -21,75 +21,18 @@ uartWriteStringZ:
 1:  ld   a, (hl)
     and  a
     jp   z, restoreBorder               ; Return via restoreBorder
-    push hl
+
+    exx
     call uartWriteByte
-    pop  hl
+    exx
 
-    call flashBorder
-
-    inc  hl
-    jr   1B
-
-flashBorder:
-    ld   a, r
+    ld   a, r                           ; Flash border
     and  7
     or   1
     out  (-2), a
-    ret
 
-; Print zero-terminated string
-; HL - string pointer
-; putStringZ:
-; printZ64:
-;     IFNDEF ZX48
-;     ld a, 7 : call changeBank
-;     ENDIF
-;     ld   b, 41
-; 1:
-;     ld   a, (hl) : and a : ret z
-;     push bc
-;     push hl : call putC : pop hl
-;     inc  hl
-;     pop  bc
-;
-;     dec  b                              ; Limit string display length
-;     ld   a, b
-;     or   a
-;     ret  z
-;     jr  1B
-;
-; printT64:
-;     ld   b, 41
-; 1:
-;     xor  a : or b : ret z
-;
-;     ld   a, (hl)
-;
-;     and  a : ret z
-;     cp   09 : ret z
-;
-;     push bc
-;
-;     push hl : call putC : pop hl
-;
-;     inc  hl : pop bc : dec b
-;     jr   1B
-;
-; printL64:
-;
-;     ld b, 41
-; .loop
-;     xor a : or b : ret z
-;     ld a, (hl)
-;
-;     and a : ret z
-;     cp #0A : ret z
-;     cp #0D : ret z;
-;
-;     push hl, bc : call putC : pop bc, hl
-;     dec b
-;     inc hl
-;     jr .loop
+    inc  hl                             ; Next byte
+    jp   1B
 
 ; HL - string
 ; Return: bc - len
