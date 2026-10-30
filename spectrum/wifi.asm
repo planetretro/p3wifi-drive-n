@@ -6,6 +6,16 @@ ROM_PRINT               EQU  0x203C             ; Print a string
         call dos_ix
     endm
 
+; ----------------------------------------------------------------------------
+; Load the WiFi SSID and password from the iw.cfg file in the current drive.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   (ssid) and (pass) populated from iw.cfg
+; Corrupts
+;   AF, BC, DE, HL, IX
+; ----------------------------------------------------------------------------
 loadWiFiConfig:
     ld      a, 1
     call    ROM_OPEN_CHANNEL
@@ -37,7 +47,17 @@ loadWiFiConfig:
     out     (-2), a
     ret
 
-; Initialize WiFi chip and connect to WiFi
+; ----------------------------------------------------------------------------
+; Reset the ESP, set client mode, disable echo, and connect to the access point
+; using (ssid) and (pass). Halts with border=3 on any step failure.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   None on success; infinite loop on failure
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 initWiFi
     ld      a, 1
     call    ROM_OPEN_CHANNEL
@@ -49,7 +69,6 @@ initWiFi
     ld      hl, cmd_rst
     call    uartWriteStringZ
 
-1
     ; Flush ESP TX buffer
     call    uartBegin
 
@@ -83,7 +102,8 @@ initWiFi
     and     1
     jr      z, errInit
 
-; Access Point connection
+    ; Access Point connection
+
     ld      hl, cmd_cwjap1
     call    uartWriteStringZ
     ld      hl, ssid
@@ -95,7 +115,8 @@ initWiFi
     ld      hl, cmd_cwjap3
     call    okErrCmd
 
-    and 1 :jr z, errInit
+    and     1
+    jr      z, errInit
 
     ret
 
@@ -105,11 +126,17 @@ errInit
     out  (-2), a
     jr $
 
-; Send AT-command and wait for result.
-; HL - Z-terminated AT-command(with CR/LF)
-; A:
-;    1 - Success
-;    0 - Failed
+; ----------------------------------------------------------------------------
+; Send an AT command string over the UART, then read until OK, ERROR, or FAIL
+; appears at the tail of the ring buffer.
+; ----------------------------------------------------------------------------
+; Entry:
+;   HL = Address of null-terminated AT command (ends with CR/LF)
+; Exit
+;   A = 1 on OK, 0 on ERROR or FAIL
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 okErrCmd
     call    uartWriteStringZ
 okErrCmdLp
@@ -139,11 +166,20 @@ okErrErr
     xor     a
     ret
 
-; Gets packet from network
-; packet will be in var 'output_buffer'
-; received packet size in var 'bytes_avail'
-;
-; If connection was closed it calls 'closed_callback'
+; ----------------------------------------------------------------------------
+; Read one TCP packet from the ESP. Scans the UART stream for +IPD,N: and copies
+; N bytes to (data_pointer), or drops them when (data_pointer) is 0. If CLOSED
+; is seen instead, falls through to closed_callback and clears connectionOpen.
+; ----------------------------------------------------------------------------
+; Entry:
+;   (data_pointer) = destination address, or 0 to discard the payload
+;   (ddl_parms)    = RAM bank to page in while writing (sector reads only)
+; Exit
+;   (data_pointer) advanced past the written bytes
+;   (connectionOpen) cleared if the connection was closed
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 getPacket
     call    uartReadBlocking
     cp      '+'
@@ -217,14 +253,37 @@ getPacket
     call uartReadBlocking : cp 13  : jp nz, getPacket
     jp   closed_callback
 
+; ----------------------------------------------------------------------------
+; Mark the TCP connection as closed by zeroing connectionOpen, then re-enable
+; interrupts. Jumped to from getPacket when a CLOSED prelude is detected.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   (connectionOpen) = 0
+;   A = 0
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 closed_callback:
     xor  a
     ld   (connectionOpen), a
     ei
     ret
 
+; ----------------------------------------------------------------------------
+; Read decimal ASCII digits of the +IPD length field until the ':' separator,
+; returning the number in HL. Also pushes each byte into the ring buffer.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   HL = Parsed byte count
+; Corrupts
+;   AF, BC
+; ----------------------------------------------------------------------------
 count_ipd_length
-    ld   hl, 0          ; count length
+    ld   hl, 0                      ; count length
 1:  push hl
     call uartReadBlocking
     push af
@@ -237,40 +296,40 @@ count_ipd_length
     call atoi2
     jr   1B
 
-cmd_rst     defb "AT+RST",13, 10, 0
-cmd_at      defb "ATE0", 13, 10, 0                  ; Disable echo - less to parse
-cmd_mode    defb "AT+CWMODE_DEF=1",13,10,0          ; Client mode
-cmd_cmux    defb "AT+CIPMUX=0",13,10,0              ; Single connection mode
-cmd_cwqap   defb "AT+CWQAP",13,10,0                 ; Disconnect from AP
-cmd_inf_off defb "AT+CIPDINFO=0",13,10,0            ; doesn't send me info about remote port and ip
+cmd_rst             defb "AT+RST",13, 10, 0
+cmd_at              defb "ATE0", 13, 10, 0             ; Disable echo - less to parse
+cmd_mode            defb "AT+CWMODE_DEF=1",13,10,0     ; Client mode
+cmd_cmux            defb "AT+CIPMUX=0",13,10,0         ; Single connection mode
+cmd_cwqap           defb "AT+CWQAP",13,10,0            ; Disconnect from AP
+cmd_inf_off         defb "AT+CIPDINFO=0",13,10,0       ; doesn't send me info about remote port and ip
 
-cmd_cwjap1  defb  "AT+CWJAP_CUR=", #22,0        ;Connect to AP. Send this -> SSID
-cmd_cwjap2  defb #22,',',#22,0                  ; -> This -> Password
-cmd_cwjap3  defb #22, 13, 10, 0                 ; -> And this
+cmd_cwjap1          defb  "AT+CWJAP_CUR=", #22,0       ; Connect to AP. Send this -> SSID
+cmd_cwjap2          defb #22,',',#22,0                 ; -> This -> Password
+cmd_cwjap3          defb #22, 13, 10, 0                ; -> And this
 
-cmd_open1   defb "AT+CIPSTART=", #22, "TCP", #22, ",", #22, 0
-cmd_open2   defb #22, ",", 0
-cmd_open3   defb 13, 10, 0
-cmd_send    defb "AT+CIPSEND=", 0
-cmd_close   defb "AT+CIPCLOSE",13,10,0
-cmd_send_b  defb "AT+CIPSEND=1", 13, 10,0
-closed      defb "CLOSED", 13, 10, 0
-ipd         defb 13, 10, "+IPD,", 0
+cmd_open1           defb "AT+CIPSTART=", #22, "TCP", #22, ",", #22, 0
+cmd_open2           defb #22, ",", 0
+cmd_open3           defb 13, 10, 0
+cmd_send            defb "AT+CIPSEND=", 0
+cmd_close           defb "AT+CIPCLOSE",13,10,0
+cmd_send_b          defb "AT+CIPSEND=1", 13, 10,0
+closed              defb "CLOSED", 13, 10, 0
+ipd                 defb 13, 10, "+IPD,", 0
 
 response_rdy        defb 'ready', 0
 response_invalid    defb 'invalid', 0
-response_ok         defb 'OK', 13, 10, 0      ; Sucessful operation
+response_ok         defb 'OK', 13, 10, 0                ; Sucessful operation
 response_ok_len     equ $-response_ok-1
-response_err        defb 13, 10, 'ERROR', 13, 10, 0      ; Failed operation
+response_err        defb 13, 10, 'ERROR', 13, 10, 0     ; Failed operation
 response_err_len    equ $-response_err-1
-response_fail       defb 13, 10, 'FAIL', 13, 10, 0       ; Failed connection to WiFi. For us same as ERROR
+response_fail       defb 13, 10, 'FAIL', 13, 10, 0      ; Failed connection to WiFi. For us same as ERROR
 response_fail_len   equ $-response_fail-1
 
-bytes_avail   defw 0
-sbyte_buff    defb 0, 0
+bytes_avail         defw 0
+sbyte_buff          defb 0, 0
 
-send_prompt     defb ">",0
-send_prompt_len equ $-send_prompt-1
+send_prompt         defb ">",0
+send_prompt_len     equ $-send_prompt-1
 
 loadingMsg:
     defb 0x16, 1, 0, "Loading WiFi config..."

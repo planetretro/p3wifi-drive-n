@@ -1,16 +1,36 @@
 ;    DEFINE DEBUG 1
 
+; ----------------------------------------------------------------------------
+; Print a null-terminated string to the current ROM channel using RST 16.
+; ----------------------------------------------------------------------------
+; Entry:
+;   HL = Address of null-terminated string
+; Exit
+;   HL = Address of the null terminator
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
     IFDEF DEBUG
 putstr:
-1:
     ld   a, (hl)
     or   a
     ret  z
     rst  16
     inc  hl
-    jp   1B
+    jp   putstr
     ENDIF
 
+; ----------------------------------------------------------------------------
+; Send a null-terminated string to the UART, flashing the border each byte.
+; Returns via restoreBorder so the border is reset on exit.
+; ----------------------------------------------------------------------------
+; Entry:
+;   HL = Address of null-terminated string
+; Exit
+;   None
+; Corrupts
+;   AF, BC, HL (via uartWriteByte); shadow BC/HL preserved
+; ----------------------------------------------------------------------------
 uartWriteStringZ:
     IFDEF DEBUG
     push hl
@@ -34,26 +54,53 @@ uartWriteStringZ:
     inc  hl                             ; Next byte
     jp   1B
 
-; HL - string
-; Return: bc - len
+; ----------------------------------------------------------------------------
+; Count the length of a null-terminated string.
+; ----------------------------------------------------------------------------
+; Entry:
+;   HL = Address of null-terminated string
+; Exit
+;   BC = Length of string (not counting the terminator)
+;   HL = Address of the null terminator
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 getStringLength:
-    ld bc, 0
-strLnLp
-    ld a, (hl)
-    and a
-    ret z
-    inc bc
-    inc hl
-    jr strLnLp
+    ld   bc, 0
+1:  ld   a, (hl)
+    and  a
+    ret  z
+    inc  bc
+    inc  hl
+    jr   1B
 
+; ----------------------------------------------------------------------------
+; Advance HL past any leading space characters.
+; ----------------------------------------------------------------------------
+; Entry:
+;   HL = Address of string
+; Exit
+;   HL = Address of first non-space character
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 SkipWhitespace:
-    ld a, (hl)
-    cp ' ' : ret nz
-    inc hl
-    jr SkipWhitespace
+    ld   a, (hl)
+    cp   ' ' : ret nz
+    inc  hl
+    jr   SkipWhitespace
 
-; DE <= StringZ
-; HL => output
+; ----------------------------------------------------------------------------
+; Convert a decimal ASCII string to a 16-bit number. Stops on null, CR, or tab.
+; ----------------------------------------------------------------------------
+; Entry:
+;   DE = Address of ASCII decimal string
+; Exit
+;   HL = Parsed value
+;   DE = Address of the terminator byte
+; Corrupts
+;   AF, BC
+; ----------------------------------------------------------------------------
 atoi:
     ld   hl, 0
 1:  ld   a, (de)
@@ -62,8 +109,19 @@ atoi:
     cp   9  : ret z
     call atoi2
     inc  de
-    jr 1B
+    jr   1B
 
+; ----------------------------------------------------------------------------
+; Fold one ASCII digit into the running accumulator (HL = HL*10 + (A - '0')).
+; ----------------------------------------------------------------------------
+; Entry:
+;   A  = ASCII digit '0'...'9'
+;   HL = Running accumulator
+; Exit
+;   HL = HL * 10 + (A - '0')
+; Corrupts
+;   AF, BC
+; ----------------------------------------------------------------------------
 atoi2:
     sub  0x30
     ld   c, l
@@ -76,8 +134,6 @@ atoi2:
     ld   b, 0
     add  hl, bc
     ret
-
-;;;;;;;;;;;;;;;;;;;;;;;;
 
 ; Binary to decimal stuff
 ; From https://www.msx.org/forum/development/msx-development/32-bit-long-ascii
@@ -105,6 +161,23 @@ atoi2:
 
 ; by Alwin Henseler
 
+; ----------------------------------------------------------------------------
+; Convert an unsigned binary number (8..64 bits) to a right-aligned space-padded
+; ASCII decimal string in B2DBUF. Enter at the label matching your input size.
+; ----------------------------------------------------------------------------
+; Entry:
+;   B2D8:  A
+;   B2D16: HL
+;   B2D24: E:HL
+;   B2D32: DE:HL
+;   B2D48: BC:DE:HL
+;   B2D64: IX:BC:DE:HL
+; Exit
+;   HL = Address of first digit in B2DBUF
+;   C  = Number of decimal digits
+; Corrupts
+;   AF, BC, DE, HL, IX
+; ----------------------------------------------------------------------------
 B2D8:    LD H,0
          LD L,A
 B2D16:   LD E,0
@@ -186,8 +259,18 @@ B2DEXPL: RLD
          SBC HL,BC       ; return with HL pointing to 1st decimal
          RET
 
+; ----------------------------------------------------------------------------
+; Append the result of a prior B2Dxx call to a destination string.
+; ----------------------------------------------------------------------------
+; Entry:
+;   HL = Destination address to write into
+;   BC = Number of digits to copy (from the B2Dxx return)
+; Exit
+;   HL = Address past the last byte written
+; Corrupts
+;   AF, DE
+; ----------------------------------------------------------------------------
 AppendB2D:
-; Append results of B2D to string at HL
     ex      de, hl  ; Get destination into DE
     ld      hl, B2DBUF
     call        SkipWhitespace

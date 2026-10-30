@@ -1,3 +1,16 @@
+; ----------------------------------------------------------------------------
+; Open a TCP request to the server, send the 9-byte read command, and stream
+; the 512-byte sector reply into the buffer pointed to by (data_pointer).
+; ----------------------------------------------------------------------------
+; Entry:
+;   ddl_parms+6..+e holds the 9-byte read command block
+;   (data_pointer) = destination buffer address
+;   (ddl_parms)    = destination RAM bank
+; Exit
+;   Sector bytes written to the destination buffer
+; Corrupts
+;   AF, BC, DE, HL, shadow set
+; ----------------------------------------------------------------------------
 loadSector:
     ld      hl, d_host
     ld      de, ddl_parms+6             ; 9-byte binary command
@@ -7,6 +20,19 @@ loadSector:
     call    loadData
     ret
 
+; ----------------------------------------------------------------------------
+; Open a TCP request to the server, send the 9-byte write command, then stream
+; 512 bytes from the source buffer (paging the bank in per byte) as the payload.
+; ----------------------------------------------------------------------------
+; Entry:
+;   ddl_parms+6..+e holds the 9-byte write command block
+;   (ddl_parms+1)  = source buffer address
+;   (ddl_parms)    = source RAM bank
+; Exit
+;   ZF = 1 on success, 0 on failure
+; Corrupts
+;   AF, BC, DE, HL, shadow set
+; ----------------------------------------------------------------------------
 storeSector:
     ld      hl, d_host
     ld      de, ddl_parms+6             ; 9-byte binary command
@@ -18,6 +44,7 @@ storeSector:
     jr      nz, .fail
 
     ; Send the 9-byte command block via uartWriteByte
+
     ld      hl, ddl_parms+6
     ld      b, 9
     call    sendBytes
@@ -57,12 +84,18 @@ storeSector:
     or      1                           ; NZ = failure, caller takes cmd_fail
     ret
 
-; Fetch the 27-byte XDPB (DPB + extended format fields) from the server.
-;   Entry: ddl_parms+6 already = $07.
-;   Exit:  Z  = success; bytes 0..$1A of xdpb populated.
-;          NZ = failure; xdpb may be partially written.
+; ----------------------------------------------------------------------------
+; Send a geometry request (cmd=$07) and stream the 27-byte XDPB reply straight
+; into bytes 0..$1A of the local XDPB.
+; ----------------------------------------------------------------------------
+; Entry:
+;   ddl_parms+6 = $07 (geometry command)
+; Exit
+;   ZF = 1 on success (xdpb[0..$1A] populated), 0 on failure
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 fetchGeom:
-    ; Stream the 27 raw bytes straight into the XDPB
     ld      hl, xdpb
     ld      (data_pointer), hl
 
@@ -74,6 +107,7 @@ fetchGeom:
     call    loadData                    ; drains until CLOSED
 
     ; data_pointer advanced by the number of bytes received.
+
     ld      hl, (data_pointer)
     ld      de, xdpb
     or      a                           ; clear CF
@@ -93,15 +127,27 @@ fetchGeom:
     ret
 
 
-; HL - domain stringZ
-; DE - path stringZ
-; BC - port stringZ
+; ----------------------------------------------------------------------------
+; Open a TCP connection to a host and send the AT+CIPSTART prelude, then issue
+; AT+CIPSEND= ready for the caller to supply a payload length.
+; ----------------------------------------------------------------------------
+; Entry:
+;   HL = Address of null-terminated host string
+;   DE = Address of command/payload pointer (stored in path_ptr for callers)
+;   BC = Address of null-terminated port string
+; Exit
+;   On success: ESP primed with AT+CIPSEND=
+;   On failure: border error indicator set via reqErr
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 openRequest:
     ld      (srv_ptr), hl
     ld      (path_ptr), de              ; Text string to send
     ld      (port_ptr), bc
 
     ; Open TCP connection
+
     ld      hl, cmd_open1
     call    uartWriteStringZ
     ld      hl, (srv_ptr)
@@ -117,12 +163,23 @@ openRequest:
     jr      nz, reqErr
 
     ; Open request
+
     ld      hl, cmd_send
     call    uartWriteStringZ
     ret
 
-; Send the 9-byte binary command pointed to by path_ptr.
-; openRequest should have been called first.
+; ----------------------------------------------------------------------------
+; Send the 9-byte binary command pointed to by (path_ptr) as a single CIPSEND
+; payload, then close the send phase.
+; ----------------------------------------------------------------------------
+; Entry:
+;   (path_ptr) set to source address by a prior openRequest
+; Exit
+;   On success: command delivered, connectionOpen set
+;   On failure: tail-calls reqErr
+; Corrupts
+;   AF, BC, DE, HL, shadow set
+; ----------------------------------------------------------------------------
 sendCmdData:
     ld      bc, 9
     call    openSendData
@@ -134,19 +191,50 @@ sendCmdData:
 
     jp      closeSend
 
+; ----------------------------------------------------------------------------
+; Signal a request error by setting the border red, then return.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   Border set to red
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 reqErr:
     ld      a, 2
     out     (-2), a
     ret
 
+; ----------------------------------------------------------------------------
+; Discard the remainder of an in-flight ESP response. Zeros (data_pointer) so
+; getPacket discards bytes, then falls through to loadData.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   (data_pointer) = 0, (connectionOpen) = 0
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 dropData:
     ld     hl, 0                     ; Flag to getPacket to discard remaining packet data
     ld     (data_pointer), hl        ; by setting data_pointer to 0
 
     ; ... falls through ...
 
-; (ddl_params+0) = page to load data in to
-; data_pointer = pointer to buffer, or 0 to throw away data
+; ----------------------------------------------------------------------------
+; Call getPacket in a loop until (connectionOpen) is zero, draining the
+; connection.
+; ----------------------------------------------------------------------------
+; Entry:
+;   (data_pointer) = destination buffer, or 0 to discard
+;   (ddl_parms)    = destination RAM bank
+; Exit
+;   (connectionOpen) = 0
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 loadData:
     call    getPacket                ; Fetch next data packet
     ld      a, (connectionOpen)      ; Check connection status
@@ -154,14 +242,24 @@ loadData:
     ret     z                        ; Exit loop if connection closed
     jp      loadData                 ; Process next packet
 
-; Should be called after 'openRequest' has been called.
-
-; BC = Total length
+; ----------------------------------------------------------------------------
+; Issue AT+CIPSEND=<BC> and wait for the ESP '>' prompt. Must be called after
+; openRequest.
+; ----------------------------------------------------------------------------
+; Entry:
+;   BC = Total payload byte count that will follow
+; Exit
+;   On success: '>' prompt consumed, caller may send BC bytes
+;   On failure: ZF = 0 and A = 0
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 openSendData:
     push    bc
     pop     hl
 
     ; Send length
+
     call    B2D16
     ld      hl, B2DBUF
     call    SkipWhitespace
@@ -181,6 +279,17 @@ waitPrompt:
     jr      nc, waitPrompt
     ret
 
+; ----------------------------------------------------------------------------
+; Terminate the AT+CIPSEND payload with CRLF and mark the connection as open so
+; loadData will drain until a CLOSED prelude arrives.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   (connectionOpen) = 1, ZF = 1
+; Corrupts
+;   AF, BC, HL
+; ----------------------------------------------------------------------------
 closeSend:
     ld      hl, crlf
     call    uartWriteStringZ
@@ -189,10 +298,17 @@ closeSend:
     xor     a                           ; Set zero flag
     ret
 
-; Send bytes to UART
+; ----------------------------------------------------------------------------
+; Send B raw bytes starting at (HL) over the UART.
+; ----------------------------------------------------------------------------
 ; Entry:
-;   B: Bytes to send
-;  HL: Address of data
+;   HL = Address of source bytes
+;   B  = Byte count
+; Exit
+;   HL = Address past the last byte sent
+; Corrupts
+;   AF, B, HL, shadow BC/HL (uartWriteByte); shadow restored via exx pairs
+; ----------------------------------------------------------------------------
 sendBytes:
     ld      a, (hl)
     exx
@@ -202,8 +318,8 @@ sendBytes:
     djnz    sendBytes
     ret
 
-data_addr       defw 0
-data_len        defw 0
+data_addr       defw    0
+data_len        defw    0
 
 data_pointer    defw    0
 data_recv       defw    0
@@ -218,6 +334,6 @@ d_port          db      '7650', 0
 
 connectionOpen  db      0
 
-srv_ptr         dw  0
-path_ptr        dw  0
-port_ptr        dw  0
+srv_ptr         dw      0
+path_ptr        dw      0
+port_ptr        dw      0

@@ -18,6 +18,17 @@
 ;         Bit 0   RX
 ; --------------------------------------
 
+; ----------------------------------------------------------------------------
+; Reset UART line state: assert CTS for ~1 second to drain the ESP TX buffer,
+; then de-assert and wait a bit before returning. Safe to call any time.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   None
+; Corrupts
+;   AF, BC
+; ----------------------------------------------------------------------------
 uartBegin:
     ld   bc, 0xFFD              ; 10T   printer port to BC
     ld   a, 0x80                ; 7T    TX = 1, CTS = 0 (allow sending)
@@ -38,6 +49,16 @@ uartBegin:
     ld   a, (ix + 0)            ; 19T
     ret                         ; 10T
 
+; ----------------------------------------------------------------------------
+; Bit-bang one byte out of the printer port at ~57600 baud, 8N1.
+; ----------------------------------------------------------------------------
+; Entry:
+;   A = Byte to send
+; Exit
+;   None
+; Corrupts
+;   AF, BC, HL
+; ----------------------------------------------------------------------------
 uartWriteByte:
     di
 
@@ -87,6 +108,18 @@ txLoop:
     ei
     ret                         ; 10T extends the stop bit duration
 
+; ----------------------------------------------------------------------------
+; Read one byte from the printer port, blocking until the ESP sends one. CTS
+; handshaking: asserts to request a byte, de-asserts once the start bit
+; arrives.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   A = Byte received
+; Corrupts
+;   AF, BC, F' (uses shadow set internally, restores main HL/DE)
+; ----------------------------------------------------------------------------
 uartReadBlocking:
     di
     ld   bc, 0xFFD              ; 10T   printer port to BC

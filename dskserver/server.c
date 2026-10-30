@@ -131,7 +131,7 @@ int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, int dir_blocks_hint,
     /* --- CP/M DPB policy --- */
     int off = (capacity <= 1024u * 1024u) ? 1 : 0;
     /* OFF is in CP/M logical tracks. For ALT, a logical track = one side,
-     * i.e. SPT × secsize bytes — NOT a whole cylinder. +3DOS maps
+     * i.e. SPT × secsize bytes (not a whole cylinder). +3DOS maps
      * logical track 0 to physical cyl 0 side 0 only. */
     size_t reserved = (size_t)off * g->dg_sectors * g->dg_secsize;
     if (reserved >= capacity) return -1;

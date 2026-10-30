@@ -7,18 +7,38 @@ bordcr      equ $5c48
 
     org     0xc000 - (3*1024)
 
+; ----------------------------------------------------------------------------
+; BASIC entry point. Jumps to start2.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   None
+; Corrupts
+;   None
+; ----------------------------------------------------------------------------
 start:
     display $
     jp      start2
 
-    ; Variables that can be peeked / poked from BASIC
+    ; Variables that can be peeked / poked from BASIC (set by CONFIG.BAS)
 
     defw    d_host                  ; Addresses so we can poke in IP address
     defw    d_port                  ; and port of server if needed
-disk_type:
-    defb    0                       ; Disk type
 
+; ----------------------------------------------------------------------------
+; Main setup. Loads WiFi config, inits the ESP, installs the N: XDPB pointer in
+; page 7, and zeroes the DPB and logged-in flag so the next access re-logs in.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   Returns to BASIC via exit
+; Corrupts
+;   AF, BC, DE, HL, IX, shadow set
+; ----------------------------------------------------------------------------
 start2:
+
     ; Set up the stack and save HL' so we can return to BASIC
 
     di
@@ -33,14 +53,15 @@ start2:
 
     ld   a, (wifiConnected)         ; Skip connect if already connected
     or   a
-    jr   nz, 1F
+    jr   nz, skipWiFi
 
     call loadWiFiConfig
     call initWiFi
     ld   a, 1                       ; Flag wifi as connected
     ld   (wifiConnected), a
 
-1:
+skipWiFi:
+
     ; Set up XDPB for drive 'N:'
 
     ld      a, 'N'
@@ -61,29 +82,30 @@ start2:
     ei
 
     ld      hl, xdpb                ; Zero XDPB in case of being called
-    ld      de, xdpb+1              ; again from BASIC
-    ld      bc, $1c
+    ld      de, xdpb+1              ; again from BASIC "GOTO 30" in loader
+    ld      bc, $1c                 ; to remove stale disk image info
     ld      (hl), 0
     ldir
 
     jp      exit
 
-; dd_login - command: cmd=$07, every other byte zero. Server ignores
-; non-command bytes
-
+; ----------------------------------------------------------------------------
+; +3DOS login hook for N:. Builds a geometry-request command (cmd=$07) and
+; calls fetchGeom to populate the XDPB bytes 0..$1A from the server reply.
+; ----------------------------------------------------------------------------
+; Entry:
+;   C  = Unit (ignored)
+;   IX = Address of destination XDPB
+; Exit
+;   On success: XDPB populated, CF = 1
+;   On failure: A = $06 ("Bad format"), CF = 0
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 login:
     push    ix
-
-    ; Zero ddl_parms+6..+$0E, then stamp the command byte.
-    ld      hl, ddl_parms+6
-    ld      de, ddl_parms+7
-    ld      bc, 8
-    ld      (hl), 0
-    ldir
-
-    ld      a, 7                     ; disk geom command
-    ld      (ddl_parms+6), a
-
+    ld      a, 7                     ; disk geom command - server ignores
+    ld      (ddl_parms+6), a         ; other bytes for command 0x07
     call    fetchGeom                ; populates (xdpb+0)..(xdpb+$1A)
     pop     ix
     jr      nz, .fail
@@ -94,12 +116,23 @@ login:
     or      a                        ; CF=0 = failure
     ret
 
-;    B = Page for C000h (49152)...FFFFh (65535)
-;    C = Unit (0/1)
-;    D = Logical track, 0 base
-;    E = Logical sector, 0 base
-;   HL = Address of buffer
+; ----------------------------------------------------------------------------
+; +3DOS read-sector hook for N: - translates the logical track/sector to a
+; physical command and calls loadSector to fetch the sector into the buffer.
+; ----------------------------------------------------------------------------
+; Entry:
+;   B  = RAM page for $C000..$FFFF
+;   C  = Unit (0/1)
+;   D  = Logical track, 0-based
+;   E  = Logical sector, 0-based
+;   HL = Address of destination buffer
 ;   IX = Address of XDPB
+; Exit
+;   On success: CF = 1
+;   On failure: A = 2 ("Seek fail"), CF = 0
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 read:
     push ix
     ld   a, 5
@@ -110,7 +143,23 @@ read:
     jr   nz, cmd_fail
     jr   cmd_success
 
-; Same call / return registers as read
+; ----------------------------------------------------------------------------
+; +3DOS write-sector hook for N: - same entry/exit as read but ships the sector
+; payload to the server via storeSector.
+; ----------------------------------------------------------------------------
+; Entry:
+;   B  = RAM page for $C000..$FFFF
+;   C  = Unit (0/1)
+;   D  = Logical track, 0-based
+;   E  = Logical sector, 0-based
+;   HL = Address of source buffer
+;   IX = Address of XDPB
+; Exit
+;   On success: CF = 1
+;   On failure: A = 2 ("Seek fail"), CF = 0
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 write:
     push ix
     ld   a, 6
@@ -121,6 +170,17 @@ write:
     jr   nz, cmd_fail
     jr   cmd_success
 
+; ----------------------------------------------------------------------------
+; Call buildFloppyCmd to populate ddl_parms, then set the sector buffer
+; address into data_pointer so getPacket can stream bytes into it.
+; ----------------------------------------------------------------------------
+; Entry:
+;   B, C, D, E, HL, IX as for the read/write hook
+; Exit
+;   ddl_parms filled, (data_pointer) = buffer address
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 prepFloppyCmd:
     push hl
     push de
@@ -134,18 +194,48 @@ prepFloppyCmd:
     ld   (data_pointer), hl
     ret
 
+; ----------------------------------------------------------------------------
+; Common success routine for the read/write hooks: restore border, set CF.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   A = 0, CF = 1
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 cmd_success:
     call restoreBorder
     xor  a
     scf                                 ; Signal success
     ret
 
+; ----------------------------------------------------------------------------
+; Common failure routine for the read/write hooks
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   A = 2 ("Seek fail"), CF = 0
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 cmd_fail:
     call restoreBorder
     xor  a
     ld   a, 2                           ; Seek fail
     ret
 
+; ----------------------------------------------------------------------------
+; Restore BASIC's stack and HL', reset the border, and return to BASIC.
+; ----------------------------------------------------------------------------
+; Entry:
+;   (old_sp) and (temp_hl) populated by start2
+; Exit
+;   Control returns to the BASIC caller
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 exit:
     di
     ld      sp, (old_sp)                ; Restore SP
@@ -156,6 +246,16 @@ exit:
     ei
     ret
 
+; ----------------------------------------------------------------------------
+; Reset the border to the colour BASIC had set via BORDCR.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   None
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 restoreBorder:
     ld      a, (bordcr)                 ; Restore border colour
     and     $38
@@ -165,10 +265,10 @@ restoreBorder:
     out     (-2), a
     ret
 
+; ----------------------------------------------------------------------------
+; CP/M 2.2 Disk Parameter Block for +3 standard 180KB format.
+; ----------------------------------------------------------------------------
 xdpb:
-    ; CP/M 2.2 Disk Parameter Block for +3 standard 180KB format.
-    ; Writing sectors needs this in place otherwise will hang. dd_sel_format
-    ; fills in the extended bytes.
     defw    36                  ; +$00 SPT: 9 sectors × 4 = 36 128-byte records
     defb    3                   ; +$02 BSH: block shift (block = 128 << 3 = 1024)
     defb    7                   ; +$03 BLM: block mask
@@ -193,11 +293,23 @@ xdpb:
     defw    read                ; read sector
     defw    write               ; write sector
 
-; Convert logical track / sector to physical
+; ----------------------------------------------------------------------------
+; Convert a logical track/sector to a physical command block in ddl_parms+6..+e.
+; Also stores the buffer address, bank, and sector size via l1b9c.
+; ----------------------------------------------------------------------------
 ; Entry:
-;   DE = Logical Track / Sector
-;    C = Unit
-
+;   D  = Logical track
+;   E  = Logical sector
+;   C  = Unit
+;   HL = Buffer address
+;   B  = Buffer bank
+;   A  = Floppy command byte
+;   IX = XDPB
+; Exit
+;   ddl_parms+1..+e populated
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
 buildFloppyCmd:
     call    l1b9c                   ; setup basic parameter block data
     ld      a,e
@@ -221,9 +333,22 @@ buildFloppyCmd:
     pop     de
     ret
 
-; Subroutine to setup some of the parameter block for sector read/writes
-; (except # command bytes & additional command bytes)
-
+; ----------------------------------------------------------------------------
+; Fill the common part of the ddl_parms block (buffer address, bank, command
+; byte, unit, sector size) ready for a sector read/write command.
+; ----------------------------------------------------------------------------
+; Entry:
+;   HL = Buffer address
+;   A  = Floppy command byte
+;   B  = Buffer bank
+;   D  = Logical track (passed through to l1bb5)
+;   C  = Unit
+;   IX = XDPB
+; Exit
+;   ddl_parms layout partially populated
+; Corrupts
+;   AF, BC, HL
+; ----------------------------------------------------------------------------
 l1b9c
     ld      (ddl_parms+1),hl        ; store buffer address
     ld      l,a                     ; Floppy command
@@ -237,9 +362,21 @@ l1b9c
     ld      (ddl_parms+3),hl        ; store sector size as # bytes to transfer
     ret
 
-; Subroutine to return physical side (B) and track (D) given logical track (D)
-; Physical side is also ORed with unit number in C
-
+; ----------------------------------------------------------------------------
+; Map a logical track to a physical (side, track) using the sidedness byte in
+; the XDPB. Side bit is also ORed into the unit byte via l1bd4.
+; ----------------------------------------------------------------------------
+; Entry:
+;   D  = Logical track
+;   C  = Unit
+;   IX = XDPB
+; Exit
+;   B  = Physical side
+;   D  = Physical track
+;   C  = Unit with side bit ORed in at bit 2
+; Corrupts
+;   AF
+; ----------------------------------------------------------------------------
 l1bb5
     ld      a,(ix+$11)
     and     $7f                     ; A=sidedness
@@ -280,7 +417,7 @@ l1bd4
 ; Entry:
 ;   A = Drive letter, 'A'...'P'
 ; Exit
-;   HL = Address in page 7 of pointer, or 0 if error
+;   HL = Address in page 7, or 0 if error
 ; Corrupts
 ;   AF, BC, DE
 ; ----------------------------------------------------------------------------
@@ -296,22 +433,32 @@ getXDPBPtr:
 .getPtr
     ld      hl,xdpb_ptrs
     sub     'A'
-    jr      c, .error         ; error if <A
+    jr      c, .error               ; error if <A
     cp      $10
-    jr      nc, .error        ; error if >P
+    jr      nc, .error              ; error if >P
     add     a,a
     add     a, low xdpb_ptrs
     ld      l,a
     adc     a, high xdpb_ptrs
     sub     l
-    ld      h, a             ; HL=xdpb_ptrs+2*drive
+    ld      h, a                    ; HL=xdpb_ptrs+2*drive
     ret
+
 .error:
     ld      hl, 0
     ret
 
-; Entry
-;   IX = +3dos routine to call
+; ----------------------------------------------------------------------------
+; Page in +3DOS, call the routine whose address is in IX, then page out.
+; ----------------------------------------------------------------------------
+; Entry:
+;   IX = Address of +3DOS routine to call
+;   Other registers as required by the target routine
+; Exit
+;   As set by the target routine
+; Corrupts
+;   AF, BC (via paging) plus whatever the target routine corrupts
+; ----------------------------------------------------------------------------
 dos_ix:
     di
     call dos_in
@@ -320,22 +467,15 @@ dos_ix:
     ei
     ret
 
-dos_tos:
-    call dos_in
-    exx                  ; preserve parameters
-    pop  hl               ; address of the DOS routine
-    ld   de,dos_tos_return ; return address from the DOS routine
-    push de              ; force the return later
-    push hl              ; address of the DOS routine
-    exx                  ; restore parameters
-    ret                  ; call routine in TOS, then continue at dos.ix.return
-
-dos_tos_return:
-    call dos_out
-    ret
-
 ; ----------------------------------------------------------------------------
-; Page in +3dos
+; Page +3DOS and RAM page 7 into $C000..$FFFF.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   None
+; Corrupts
+;   (none - AF, BC preserved via internal push/pop)
 ; ----------------------------------------------------------------------------
 dos_in:
     push af
@@ -350,7 +490,16 @@ dos_in:
     pop  af
     ret
 
-; A = RAM page
+; ----------------------------------------------------------------------------
+; Page the requested RAM bank into $C000..$FFFF without changing the ROM map.
+; ----------------------------------------------------------------------------
+; Entry:
+;   A = RAM page number (0..7)
+; Exit
+;   None
+; Corrupts
+;   AF, BC, E
+; ----------------------------------------------------------------------------
 ram_page_in:
     ld      e, a
     ld      bc, $7ffd
@@ -360,17 +509,44 @@ ram_page_in:
     out     (c), a
     ret
 
+; ----------------------------------------------------------------------------
+; Restore the default banking configuration (whatever is in bankm).
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   None
+; Corrupts
+;   AF, BC
+; ----------------------------------------------------------------------------
 ram_page_out:
     ld      bc, $7ffd
     ld      a, (bankm)
     out     (c), a          ; restore memory configuration
     ret
 
+; ----------------------------------------------------------------------------
+; Jump through IX. Helper so dos_ix can CALL into IX with a RET-back path.
+; ----------------------------------------------------------------------------
+; Entry:
+;   IX = Target address
+; Exit
+;   As set by the target routine
+; Corrupts
+;   As set by the target routine
+; ----------------------------------------------------------------------------
 call_ix:
     jp   (ix)                           ; Jump to IX and return
 
 ; ----------------------------------------------------------------------------
-; Page out +3DOS
+; Page +3DOS out and restore RAM page 0 and ROM 3 (48K BASIC).
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   None
+; Corrupts
+;   (none - AF, BC preserved via internal push/pop)
 ; ----------------------------------------------------------------------------
 dos_out:
     push af
@@ -438,8 +614,6 @@ end:
 ; +$01    2     Buffer address
 ; +$03    2     Sector size in bytes
 ; +$05    1     # Command bytes
-
-; READ
 
 ; +$06    1     Command byte
 ; +$07    1     Unit byte                   x x x x x H U1 U0
