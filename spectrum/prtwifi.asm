@@ -44,9 +44,9 @@ uartBegin:
     ld   a, 0x81                ; 7T    TX = 1, CTS = 1 (stop sending)
     out  (c), a                 ; 12T
 
-    ld   a, (ix + 0)            ; 19T   Wait at least one bit
-    ld   a, (ix + 0)            ; 19T
-    ld   a, (ix + 0)            ; 19T
+    ; ld   a, (ix + 0)            ; 19T   Wait at least one bit
+    ; ld   a, (ix + 0)            ; 19T
+    ; ld   a, (ix + 0)            ; 19T
     ret                         ; 10T
 
 ; ----------------------------------------------------------------------------
@@ -190,10 +190,10 @@ rxLoop:
 
 ; Delay for stop bit
 
-    ex   af, af'                ; 4T
-    ld   a, (ix + 0)            ; 19T delay
-    ld   a, (ix + 0)            ; 19T delay
-    ex   af, af'                ; 4T
+    ; ex   af, af'                ; 4T
+    ; ld   a, (ix + 0)            ; 19T delay
+    ; ld   a, (ix + 0)            ; 19T delay
+    ; ex   af, af'                ; 4T
 
     ei                          ; 4T
     ret                         ; 10T   Return with byte in A
@@ -203,8 +203,15 @@ rxLoop:
 rxError
     ld   hl, readErrors         ; 3T
     inc  (hl)                   ; 11T
-    jp   nz, rxRetry            ; 7/12T
+    jp   z, .giveup             ; 7/12T
 
+    xor  a
+.wait:
+    dec  a
+    jr   nz, .wait
+    jp   rxRetry
+
+.giveup
     ld   a, 2                   ; 7T
     out  (-2), a                ; 11T
     ret                         ; 10T
