@@ -86,75 +86,28 @@ typedef struct {
 } DiskCommand;
 
 /**
- * Parse ASCII hex string into disk command structure
- * Example input: "05 09 01 00 01 02 01 2A FF"
- * Returns 0 on success, -1 on error
+ * Decode 9 raw command bytes into the DiskCommand struct.
+ * Bytes map 1:1 to Spectrum's ddl_parms+6..+e.
  */
-int parse_command(const char *input, DiskCommand *cmd) {
-    char *token;
-    char *ptr;
-    unsigned int values[9];
-    int count = 0;
-
-    // Initialize error flag
-    cmd->ddError = 0;
-
-    // Copy command out of buffer
-    char cmdBuffer[29];
-    cmdBuffer[26] = ' ';
-    cmdBuffer[27] = ' ';
-    cmdBuffer[28] = '\0';
-    memcpy(cmdBuffer, input, 26);
-
-    // Parse space-separated hex values
-    token = strtok(cmdBuffer, " ");
-
-    while (token && count < 9) {
-        // Convert hex string to unsigned int
-        values[count] = strtoul(token, &ptr, 16);
-
-        // Check if conversion was successful
-        if (*ptr != '\0' || (values[count] == 0 && token[0] != '0')) {
-            cmd->ddError = 1;
-            return -1;
-        }
-
-        // Check if value is within byte range
-        if (values[count] > 0xFF) {
-            cmd->ddError = 1;
-            return -1;
-        }
-
-        if (verbosity >= 2) printf("%02x ", values[count]);
-
-        count++;
-
-        // Next token
-        token = strtok(NULL, " ");
-    }
-
-    if (verbosity >= 2) printf("\n");
-
-    // Check if we got exactly 9 values (or at least 9)
-    if (count < 9) {
-        cmd->ddError = 1;
-        return -1;
-    }
-
-    // Assign values to command structure
-    cmd->ddCmd = (unsigned char)values[0];
-    cmd->ddUnit = (unsigned char)values[1];
-    cmd->ddTrack = (unsigned char)values[2];
-    cmd->ddSide = (unsigned char)values[3];
-    cmd->ddStartSec = (unsigned char)values[4];
-    cmd->ddSize = (unsigned char)values[5];
-    cmd->ddEndSec = (unsigned char)values[6];
-    cmd->ddGap = (unsigned char)values[7];
-    cmd->ddLen = (unsigned char)values[8];
+int parse_command(const unsigned char *input, DiskCommand *cmd) {
+    cmd->ddError    = 0;
+    cmd->ddCmd      = input[0];
+    cmd->ddUnit     = input[1];
+    cmd->ddTrack    = input[2];
+    cmd->ddSide     = input[3];
+    cmd->ddStartSec = input[4];
+    cmd->ddSize     = input[5];
+    cmd->ddEndSec   = input[6];
+    cmd->ddGap      = input[7];
+    cmd->ddLen      = input[8];
 
     // Side is already in ddSide (ddl_parms+9)
-    cmd->ddHead = cmd->ddSide;
+    cmd->ddHead     = cmd->ddSide;
 
+    if (verbosity >= 2) {
+        for (int i = 0; i < 9; i++) printf("%02x ", input[i]);
+        printf("\n");
+    }
     return 0;
 }
 
@@ -272,12 +225,12 @@ void handle_client(int client_socket) {
     // Disable Nagle's algorithm for immediate send (ESP-12 compatibility)
     setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
 
-    // Receive command from client. Loop until we have at least the 26-byte
+    // Receive command from client. Loop until we have at least the 9-byte
     // command header; a single CIPSEND may deliver command + payload together,
     // in which case we read as much as fits in one go.
     memset(recv_buffer, 0, BUFFER_SIZE);
     bytes_received = 0;
-    while (bytes_received < 26) {
+    while (bytes_received < 9) {
         ssize_t n = recv(client_socket, recv_buffer + bytes_received,
                          BUFFER_SIZE - 1 - bytes_received, 0);
         if (n <= 0) {
@@ -292,11 +245,10 @@ void handle_client(int client_socket) {
         bytes_received += n;
     }
 
-    recv_buffer[bytes_received] = '\0';
     if (verbosity >= 2) printf("Received %zd bytes\n", bytes_received);
 
     // Parse the command
-    if (parse_command(recv_buffer, &cmd) != 0) {
+    if (parse_command((const unsigned char *)recv_buffer, &cmd) != 0) {
         fprintf(stderr, "Error parsing command\n");
         close(client_socket);
         return;
@@ -387,10 +339,10 @@ void handle_client(int client_socket) {
 
         // The first recv() may have consumed some payload bytes past the
         // 26-byte command header; carry them forward.
-        if (bytes_received > 26) {
-            size_t extra = bytes_received - 26;
+        if (bytes_received > 9) {
+            size_t extra = bytes_received - 9;
             if (extra > sizeof(sector_data)) extra = sizeof(sector_data);
-            memcpy(sector_data, recv_buffer + 26, extra);
+            memcpy(sector_data, recv_buffer + 9, extra);
             have = extra;
         }
 

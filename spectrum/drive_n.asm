@@ -84,7 +84,6 @@ login:
     ld      a, 7                     ; disk geom command
     ld      (ddl_parms+6), a
 
-    call    floppyCmdToString        ; → 26-byte ASCII hex in d_path
     call    fetchGeom                ; populates (xdpb+0)..(xdpb+$1A)
     pop     ix
     jr      nz, .fail
@@ -130,7 +129,6 @@ prepFloppyCmd:
     pop  bc
     pop  de
     pop  hl
-    call floppyCmdToString              ; Convert to hex string
 
     ld   hl, (ddl_parms+1)              ; buffer address for sector read/write
     ld   (data_pointer), hl
@@ -165,50 +163,6 @@ restoreBorder:
     rrca
     rrca
     out     (-2), a
-    ret
-
-floppyCmdToString:
-    ld   hl, ddl_parms+6
-    ld   bc, 0x09
-    ld   de, d_path
-    call bytesToHex
-    xor  a                              ; Null terminate string
-    ld   (hl), a
-    ret
-
-bytesToHex:
-1:  ld   a, (hl)
-    push bc
-    call hexToBuf
-    pop  bc
-    inc  hl
-    dec  bc
-    ld   a, b
-    or   c
-    ret  z
-    ld   a, ' '
-    ld   (de), a
-    inc  de
-    jr   1B
-
-; Entry:
-;   A = Hex value
-;  DE = Output buffer
-hexToBuf:
-    ld   c, a
-    rra
-    rra
-    rra
-    rra
-    call 1f
-    ld   a, c
-1:  and  0x0f
-    add  a, 0x90
-    daa
-    adc  a, 0x40
-    daa
-    ld   (de), a
-    inc  de
     ret
 
 xdpb:
@@ -327,6 +281,8 @@ l1bd4
 ;   A = Drive letter, 'A'...'P'
 ; Exit
 ;   HL = Address in page 7 of pointer, or 0 if error
+; Corrupts
+;   AF, BC, DE
 ; ----------------------------------------------------------------------------
 getXDPBPtr:
     push    af
