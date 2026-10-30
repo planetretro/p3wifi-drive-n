@@ -5,3 +5,4 @@ dskserver/dskserver
 .DS_Store
 tools/mkdsk/mkdsk.o
 tools/mkdsk/mkdsk
+tools/mkdsk/*.dsk
