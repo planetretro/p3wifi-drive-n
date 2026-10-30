@@ -1,0 +1,21 @@
+diskdef p3wifi-4m
+  seclen 512
+  tracks 256
+  sectrk 32
+  blocksize 4096
+  maxdir 128
+  skew 1
+  boottrk 0
+  os 2.2
+end
+
+diskdef p3wifi-8m
+  seclen 512
+  tracks 256
+  sectrk 64
+  blocksize 8192
+  maxdir 256
+  skew 1
+  boottrk 0
+  os 2.2
+end

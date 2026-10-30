@@ -1,10 +1,12 @@
 # mkdsk
 
-Create pre-formatted DSK images for the p3wifi `N:` drive.
+Creates pre-formatted DSK images for the p3wifi `N:` drive.
 
-Four fixed geometries: the two standard formats +3DOS knows about, plus two custom "large" formats designed for the network drive (essentially giving you a 4M or 8M hard disk served over the network). Every sector is filled with `$E5` so +3DOS sees an empty, clean disk on first access (so there's no need for thse disk images to be fornatted).
+There are four fixed geometries: the two standard formats +3DOS knows about, plus two custom "large" formats designed for using over the network (essentially giving you a 4M or 8M networked 'hard-drive'). Every sector is filled with `$E5` so +3DOS sees an empty, clean disk on first access (so there's no need for thse disk images to be fornatted).
 
 180K and 720K are 'standard' DSK images. 4M and 8M disks are EDSK images due to them having more than 29 sectors per track.
+
+> The 4M and 8M disk images can be read and written with [cpmtools](https://github.com/lipro-cpm4l/cpmtools) by using the diskdefs file in tools/mkdsk.
 
 ## Build
 
