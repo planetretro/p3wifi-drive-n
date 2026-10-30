@@ -576,11 +576,14 @@ temp_hl:
 wifiConnected:
     defb    0
 
+; Sized for the largest supported geometry:
+;   chksm_a: max CKS = 64 bytes (DRM=255 on 720K and 8M → (DRM+1)/4 = 64)
+;   alloc_a: max alloc bitmap = 128 bytes (DSM=1023 on 4M and 8M → 1024/8)
 chksm_a
-    defs $10, 0
+    defs 64, 0
 
 alloc_a
-    defs $2d, 0
+    defs 128, 0
 
 old_sp:
     defw 0
