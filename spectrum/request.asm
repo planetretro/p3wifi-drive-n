@@ -291,8 +291,6 @@ waitPrompt:
 ;   AF, BC, HL
 ; ----------------------------------------------------------------------------
 closeSend:
-    ld      hl, crlf
-    call    uartWriteStringZ
     ld      a, 1
     ld      (connectionOpen), a
     xor     a                           ; Set zero flag
