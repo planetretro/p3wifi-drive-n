@@ -377,7 +377,7 @@ void handle_client(int client_socket) {
 done:
     // Shutdown the write side to signal we're done sending
     shutdown(client_socket, SHUT_WR);
-    usleep(100000); // 100ms delay for ESP before closing
+    usleep(200000); // 200ms delay for ESP before closing
     close(client_socket);
 }
 
@@ -443,6 +443,7 @@ int start_server(void) {
         }
 
         handle_client(client_socket);
+        usleep(50000);
     }
 
     close(server_socket);
