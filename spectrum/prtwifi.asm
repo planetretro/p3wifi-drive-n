@@ -1,8 +1,8 @@
 ; ==============================================================================================
 ; RS232 through +3 printer port, 57600, 8N1, +CTS, -RTS
-; 57600bps (17,3611μs)
-; 61.57813T on ZX 128k, 61T will take 17.19811μs, error -0.9% (58146bps)
-; 60.76389T on ZX 48k,  61T will take 17.42857μs, error +0.4% (57377bps)
+; 57600bps (17,3611us)
+; 61.57813T on ZX 128k, 61T will take 17.19811us, error -0.9% (58146bps)
+; 60.76389T on ZX 48k,  61T will take 17.42857us, error +0.4% (57377bps)
 ;
 ; Based on some *amazing* work here: https://cygnus.speccy.cz/popis_zx-spectrum_dg192k_rs232.php
 ; ==============================================================================================
@@ -47,6 +47,7 @@ uartBegin:
     ; ld   a, (ix + 0)            ; 19T   Wait at least one bit
     ; ld   a, (ix + 0)            ; 19T
     ; ld   a, (ix + 0)            ; 19T
+
     ret                         ; 10T
 
 ; ----------------------------------------------------------------------------
@@ -179,7 +180,7 @@ rxLoop:
 
 ; followed by reading the MSB, bit 7
 
-    in   a, (c)                 ; 12T   read port (MSB is somewhere in the middle of the duration, to the stop bit approx. 31 ± 13T ± 2T accuracy deviation 3%)
+    in   a, (c)                 ; 12T   read port (MSB is somewhere in the middle of the duration, to the stop bit approx. 31 +/- 13T +/- 2T accuracy deviation 3%)
     rrca                        ; 4T    bit 0 to carry flag
     ld   a, l                   ; 4T    almost assembled byte to A
     rra                         ; 4T    rotate the MSB to bit 7 in A
@@ -190,10 +191,10 @@ rxLoop:
 
 ; Delay for stop bit
 
-    ; ex   af, af'                ; 4T
-    ; ld   a, (ix + 0)            ; 19T delay
-    ; ld   a, (ix + 0)            ; 19T delay
-    ; ex   af, af'                ; 4T
+    ex   af, af'                ; 4T
+    ld   a, (ix + 0)            ; 19T delay
+    ld   a, (ix + 0)            ; 19T delay
+    ex   af, af'                ; 4T
 
     ei                          ; 4T
     ret                         ; 10T   Return with byte in A

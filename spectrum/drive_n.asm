@@ -61,7 +61,6 @@ start2:
     ld   (wifiConnected), a
 
 skipWiFi:
-
     ; Set up XDPB for drive 'N:'
 
     ld      a, 'N'
@@ -81,11 +80,14 @@ skipWiFi:
     call    ram_page_out
     ei
 
+    xor     a
     ld      hl, xdpb                ; Zero XDPB in case of being called
     ld      de, xdpb+1              ; again from BASIC "GOTO 30" in loader
     ld      bc, $1c                 ; to remove stale disk image info
-    ld      (hl), 0
+    ld      (hl), a
     ldir
+
+    ld      (connectionAlive), a    ; Force TCP reconnect on next access
 
     jp      exit
 
@@ -266,21 +268,12 @@ restoreBorder:
     ret
 
 ; ----------------------------------------------------------------------------
-; CP/M 2.2 Disk Parameter Block for +3 standard 180KB format.
+; XDPB for drive N:. Bytes $00..$1A are the CP/M 2.2 DPB plus the +3DOS format
+; extension. Populated by the login hook which calls the server to fetch
+; the disk image geometry
 ; ----------------------------------------------------------------------------
 xdpb:
-    defw    36                  ; +$00 SPT: 9 sectors × 4 = 36 128-byte records
-    defb    3                   ; +$02 BSH: block shift (block = 128 << 3 = 1024)
-    defb    7                   ; +$03 BLM: block mask
-    defb    0                   ; +$04 EXM: extent mask
-    defw    174                 ; +$05 DSM: max block number (175 blocks)
-    defw    63                  ; +$07 DRM: max directory entry (64 entries)
-    defb    $c0                 ; +$09 AL0: blocks 0+1 reserved for directory
-    defb    $00                 ; +$0a AL1
-    defb    16                  ; +$0b CKS LSB: checksum vector size (DRM+1)/4
-    defb    $80                 ; +$0c CKS MSB with bit 7 set to indicate fixed drive
-    defw    1                   ; +$0d OFF: reserved tracks (track 0 = boot)
-    defs    $1b - 15, 0         ; $0f-$1a: dd_sel_format writes $11-$19
+    defs    $1b, 0              ; $00..$1A: DPB + format fields, filled by server
 
 .l17f6
     defb    $00,'N',$00         ; flags,drive,unit - bit 2 CLEAR so +3DOS
@@ -577,8 +570,8 @@ wifiConnected:
     defb    0
 
 ; Sized for the largest supported geometry:
-;   chksm_a: max CKS = 64 bytes (DRM=255 on 720K and 8M → (DRM+1)/4 = 64)
-;   alloc_a: max alloc bitmap = 128 bytes (DSM=1023 on 4M and 8M → 1024/8)
+;   chksm_a: max CKS = 64 bytes (DRM=255 on 720K and 8M -> (DRM+1)/4 = 64)
+;   alloc_a: max alloc bitmap = 128 bytes (DSM=1023 on 4M and 8M -> 1024/8)
 chksm_a
     defs 64, 0
 

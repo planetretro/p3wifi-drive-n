@@ -17,7 +17,7 @@ loadSector:
     ld      bc, d_port
     call    openRequest
     call    sendCmdData
-    call    loadData
+    call    getPacket
     ret
 
 ; ----------------------------------------------------------------------------
@@ -74,8 +74,14 @@ storeSector:
     or      c
     jr      nz, 1B
 
-    call    closeSend                   ; trailing CRLF
-    call    dropData                    ; discard trailing packet data
+    ; Read 1-byte ACK via +IPD,1:x
+    ld      hl, ack_byte
+    ld      (data_pointer), hl
+    call    getPacket
+
+    ld      a, (ack_byte)
+    or      a
+    jr      nz, .fail
 
     xor     a                           ; Z = success
     ret
@@ -104,7 +110,7 @@ fetchGeom:
     ld      bc, d_port
     call    openRequest
     call    sendCmdData                 ; 9-byte cmd via CIPSEND=9
-    call    loadData                    ; drains until CLOSED
+    call    getPacket                   ; read the 27-byte +IPD reply
 
     ; data_pointer advanced by the number of bytes received.
 
@@ -114,7 +120,7 @@ fetchGeom:
     sbc     hl, de                      ; HL = bytes received
     ld      a, h
     or      a
-    jr      nz, .fail                   ; > 255 ⇒ bogus
+    jr      nz, .fail                   ; > 255 -> bogus
     ld      a, l
     cp      27
     jr      nz, .fail                   ; need exactly 27
@@ -128,8 +134,8 @@ fetchGeom:
 
 
 ; ----------------------------------------------------------------------------
-; Open a TCP connection to a host and send the AT+CIPSTART prelude, then issue
-; AT+CIPSEND= ready for the caller to supply a payload length.
+; Ensure the persistent TCP connection is up, then issue AT+CIPSEND= ready for
+; the caller to supply a payload length.
 ; ----------------------------------------------------------------------------
 ; Entry:
 ;   HL = Address of null-terminated host string
@@ -146,8 +152,57 @@ openRequest:
     ld      (path_ptr), de              ; Text string to send
     ld      (port_ptr), bc
 
-    ; Open TCP connection
+    call    ensureConnection
 
+    ld      hl, cmd_send
+    call    uartWriteStringZ
+    ret
+
+; ----------------------------------------------------------------------------
+; Ensure the persistent TCP connection to the server is alive. If marked dead,
+; retry a few times, closing between attempts to clear any wedged state. On
+; total failure, tail-calls reqErr (red border + return).
+; ----------------------------------------------------------------------------
+; Entry:
+;   (srv_ptr), (port_ptr) populated by a prior openRequest
+; Exit
+;   (connectionAlive) = 1 on success
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
+ensureConnection:
+    ld      a, (connectionAlive)
+    or      a
+    ret     nz                          ; already alive
+
+    ld      b, 3                        ; max retries
+.retry:
+    push    bc
+    call    tryOpen
+    jr      z, .ok                      ; opened; BC still on stack
+    call    tryClose                    ; clean up before retry
+    pop     bc
+    djnz    .retry
+
+    jp      reqErr                      ; retries exhausted
+
+.ok:
+    pop     bc
+    ld      a, 1
+    ld      (connectionAlive), a
+    ret
+
+; ----------------------------------------------------------------------------
+; Try to open the TCP connection via AT+CIPSTART.
+; ----------------------------------------------------------------------------
+; Entry:
+;   (srv_ptr), (port_ptr) populated
+; Exit
+;   ZF = 1 on success, ZF = 0 on failure
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
+tryOpen:
     ld      hl, cmd_open1
     call    uartWriteStringZ
     ld      hl, (srv_ptr)
@@ -158,14 +213,25 @@ openRequest:
     call    uartWriteStringZ
     ld      hl, cmd_open3
     call    okErrCmd
+    dec     a                           ; A=1 -> ZF=1, A=0 -> ZF=0
+    ret
 
-    cp      1
-    jr      nz, reqErr
-
-    ; Open request
-
-    ld      hl, cmd_send
-    call    uartWriteStringZ
+; ----------------------------------------------------------------------------
+; Issue AT+CIPCLOSE and mark connection dead. Response is ignored; this is for
+; recovering from an unknown state before retrying open.
+; ----------------------------------------------------------------------------
+; Entry:
+;   None
+; Exit
+;   (connectionAlive) = 0
+; Corrupts
+;   AF, BC, DE, HL
+; ----------------------------------------------------------------------------
+tryClose:
+    ld      hl, cmd_close
+    call    okErrCmd
+    xor     a
+    ld      (connectionAlive), a
     ret
 
 ; ----------------------------------------------------------------------------
@@ -175,7 +241,7 @@ openRequest:
 ; Entry:
 ;   (path_ptr) set to source address by a prior openRequest
 ; Exit
-;   On success: command delivered, connectionOpen set
+;   On success: command delivered, ZF = 1
 ;   On failure: tail-calls reqErr
 ; Corrupts
 ;   AF, BC, DE, HL, shadow set
@@ -187,9 +253,7 @@ sendCmdData:
 
     ld      hl, (path_ptr)
     ld      b, 9
-    call    sendBytes
-
-    jp      closeSend
+    jp      sendBytes
 
 ; ----------------------------------------------------------------------------
 ; Signal a request error by setting the border red, then return.
@@ -205,42 +269,6 @@ reqErr:
     ld      a, 2
     out     (-2), a
     ret
-
-; ----------------------------------------------------------------------------
-; Discard the remainder of an in-flight ESP response. Zeros (data_pointer) so
-; getPacket discards bytes, then falls through to loadData.
-; ----------------------------------------------------------------------------
-; Entry:
-;   None
-; Exit
-;   (data_pointer) = 0, (connectionOpen) = 0
-; Corrupts
-;   AF, BC, DE, HL
-; ----------------------------------------------------------------------------
-dropData:
-    ld     hl, 0                     ; Flag to getPacket to discard remaining packet data
-    ld     (data_pointer), hl        ; by setting data_pointer to 0
-
-    ; ... falls through ...
-
-; ----------------------------------------------------------------------------
-; Call getPacket in a loop until (connectionOpen) is zero, draining the
-; connection.
-; ----------------------------------------------------------------------------
-; Entry:
-;   (data_pointer) = destination buffer, or 0 to discard
-;   (ddl_parms)    = destination RAM bank
-; Exit
-;   (connectionOpen) = 0
-; Corrupts
-;   AF, BC, DE, HL
-; ----------------------------------------------------------------------------
-loadData:
-    call    getPacket                ; Fetch next data packet
-    ld      a, (connectionOpen)      ; Check connection status
-    or      a                        ; Test if zero
-    ret     z                        ; Exit loop if connection closed
-    jp      loadData                 ; Process next packet
 
 ; ----------------------------------------------------------------------------
 ; Issue AT+CIPSEND=<BC> and wait for the ESP '>' prompt. Must be called after
@@ -268,7 +296,15 @@ openSendData:
     call    okErrCmd
 
     cp      1
-    ret     nz
+    jr      z, waitPrompt
+
+    ; CIPSEND failed - most likely the TCP connection was dropped while we
+    ; weren't looking. Mark it dead so the next call to ensureConnection
+    ; reopens it
+
+    ld      hl, connectionAlive
+    ld      (hl), 0                     ; flags from cp 1 preserved (NZ)
+    ret
 
 waitPrompt:
     call    uartReadBlocking
@@ -277,23 +313,6 @@ waitPrompt:
     ld      b, send_prompt_len
     call    searchRing
     jr      nc, waitPrompt
-    ret
-
-; ----------------------------------------------------------------------------
-; Terminate the AT+CIPSEND payload with CRLF and mark the connection as open so
-; loadData will drain until a CLOSED prelude arrives.
-; ----------------------------------------------------------------------------
-; Entry:
-;   None
-; Exit
-;   (connectionOpen) = 1, ZF = 1
-; Corrupts
-;   AF, BC, HL
-; ----------------------------------------------------------------------------
-closeSend:
-    ld      a, 1
-    ld      (connectionOpen), a
-    xor     a                           ; Set zero flag
     ret
 
 ; ----------------------------------------------------------------------------
@@ -330,7 +349,8 @@ d_host          defb    '192.168.1.50', 0
 d_port          db      '7650', 0
                 defs    1
 
-connectionOpen  db      0
+connectionAlive db      0
+ack_byte        db      0
 
 srv_ptr         dw      0
 path_ptr        dw      0

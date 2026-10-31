@@ -169,14 +169,14 @@ okErrErr
 ; ----------------------------------------------------------------------------
 ; Read one TCP packet from the ESP. Scans the UART stream for +IPD,N: and copies
 ; N bytes to (data_pointer), or drops them when (data_pointer) is 0. If CLOSED
-; is seen instead, falls through to closed_callback and clears connectionOpen.
+; is seen instead, falls through to closed_callback and clears connectionAlive.
 ; ----------------------------------------------------------------------------
 ; Entry:
 ;   (data_pointer) = destination address, or 0 to discard the payload
 ;   (ddl_parms)    = RAM bank to page in while writing (sector reads only)
 ; Exit
 ;   (data_pointer) advanced past the written bytes
-;   (connectionOpen) cleared if the connection was closed
+;   (connectionAlive) cleared if the connection was closed
 ; Corrupts
 ;   AF, BC, DE, HL
 ; ----------------------------------------------------------------------------
@@ -254,20 +254,22 @@ getPacket
     jp   closed_callback
 
 ; ----------------------------------------------------------------------------
-; Mark the TCP connection as closed by zeroing connectionOpen, then re-enable
-; interrupts. Jumped to from getPacket when a CLOSED prelude is detected.
+; Mark the TCP connection as dead by zeroing connectionAlive, then re-enable
+; interrupts. Jumped to from getPacket when a CLOSED prelude is detected -
+; i.e. the server dropped the persistent connection unexpectedly, so the next
+; openRequest will force a reconnect via ensureConnection.
 ; ----------------------------------------------------------------------------
 ; Entry:
 ;   None
 ; Exit
-;   (connectionOpen) = 0
+;   (connectionAlive) = 0
 ;   A = 0
 ; Corrupts
 ;   AF
 ; ----------------------------------------------------------------------------
 closed_callback:
     xor  a
-    ld   (connectionOpen), a
+    ld   (connectionAlive), a
     ei
     ret
 
@@ -324,6 +326,8 @@ response_err        defb 13, 10, 'ERROR', 13, 10, 0     ; Failed operation
 response_err_len    equ $-response_err-1
 response_fail       defb 13, 10, 'FAIL', 13, 10, 0      ; Failed connection to WiFi. For us same as ERROR
 response_fail_len   equ $-response_fail-1
+response_closed     defb 'CLOSED', 13, 10, 0            ; TCP connection closed
+response_closed_len equ $-response_closed-1
 
 bytes_avail         defw 0
 sbyte_buff          defb 0, 0

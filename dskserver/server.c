@@ -210,174 +210,157 @@ int build_xdpb(const DSK_GEOMETRY *g, size_t capacity, int dir_blocks_hint,
     return 0;
 }
 
+/* Receive exactly n bytes into buf. Returns 0 on success, -1 on
+ * disconnect/error. */
+static int recv_exact(int sock, void *buf, size_t n) {
+    size_t have = 0;
+    while (have < n) {
+        ssize_t r = recv(sock, (char *)buf + have, n - have, 0);
+        if (r <= 0) return -1;
+        have += r;
+    }
+    return 0;
+}
+
+/* Send exactly n bytes from buf. Returns 0 on success, -1 on error. */
+static int send_exact(int sock, const void *buf, size_t n) {
+    size_t sent = 0;
+    while (sent < n) {
+        ssize_t r = send(sock, (const char *)buf + sent, n - sent, 0);
+        if (r < 0) return -1;
+        sent += r;
+    }
+    return 0;
+}
+
 /**
- * Handle client connection and process disk read command
+ * Handle a persistent client connection - loops processing one command at a
+ * time until the client disconnects.
+ *
+ * Protocol:
+ *   Spectrum -> server: 9-byte command (+ 512-byte payload for writes)
+ *   server -> Spectrum: 27-byte XDPB (geom), 512-byte sector (read), 1-byte
+ *                      status (write; 0 = OK).
  */
 void handle_client(int client_socket) {
-    char recv_buffer[BUFFER_SIZE];
+    unsigned char cmd_buf[9];
     unsigned char sector_data[512];
     DiskCommand cmd;
-    ssize_t bytes_received;
-    ssize_t total_sent = 0;
     dsk_err_t result;
     int flag = 1;
 
     // Disable Nagle's algorithm for immediate send (ESP-12 compatibility)
     setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
 
-    // Receive command from client. Loop until we have at least the 9-byte
-    // command header; a single CIPSEND may deliver command + payload together,
-    // in which case we read as much as fits in one go.
-    memset(recv_buffer, 0, BUFFER_SIZE);
-    bytes_received = 0;
-    while (bytes_received < 9) {
-        ssize_t n = recv(client_socket, recv_buffer + bytes_received,
-                         BUFFER_SIZE - 1 - bytes_received, 0);
-        if (n <= 0) {
-            if (n == 0) {
-                if (verbosity >= 2) printf("Client disconnected\n");
-            } else {
-                perror("recv failed");
-            }
-            close(client_socket);
-            return;
-        }
-        bytes_received += n;
-    }
-
-    if (verbosity >= 2) printf("Received %zd bytes\n", bytes_received);
-
-    // Parse the command
-    if (parse_command((const unsigned char *)recv_buffer, &cmd) != 0) {
-        fprintf(stderr, "Error parsing command\n");
-        close(client_socket);
-        return;
-    }
-
-    // Display parsed command
-    if (verbosity >= 3) {
-        printf("Parsed command:\n");
-        printf("  %-11s 0x%02X\n", "ddCmd:",      cmd.ddCmd);
-        printf("  %-11s 0x%02X\n", "ddUnit:",     cmd.ddUnit);
-        printf("  %-11s %d\n",     "ddTrack:",    cmd.ddTrack);
-        printf("  %-11s %d\n",     "ddSide:",     cmd.ddSide);
-        printf("  %-11s %d\n",     "ddStartSec:", cmd.ddStartSec);
-        printf("  %-11s 0x%02X\n", "ddSize:",     cmd.ddSize);
-        printf("  %-11s %d\n",     "ddEndSec:",   cmd.ddEndSec);
-        printf("  %-11s 0x%02X\n", "ddGap:",      cmd.ddGap);
-        printf("  %-11s 0x%02X\n", "ddLen:",      cmd.ddLen);
-        printf("  %-11s %d\n",     "ddHead:",     cmd.ddHead);
-    }
-
-    // Get XDPB (login handshake)
-    if (cmd.ddCmd == 0x07) {
-        uint8_t xdpb[27];
-        size_t cap = (size_t)geom.dg_cylinders * geom.dg_heads
-                   * geom.dg_sectors * geom.dg_secsize;
-
-        if (build_xdpb(&geom, cap, dir_blocks_override, xdpb) != 0) {
-            fprintf(stderr, "build_xdpb failed for capacity %zu bytes\n", cap);
-            goto done;   /* close without sending → Spectrum login bails */
+    for (;;) {
+        // Pull the next 9-byte command header. Returns -1 if client went away.
+        if (recv_exact(client_socket, cmd_buf, 9) < 0) {
+            if (verbosity >= 2) printf("Client disconnected\n");
+            break;
         }
 
-        if (verbosity >= 2) {
-            printf(" Geom:");
-            for (int i = 0; i < 27; i++) printf(" %02X", xdpb[i]);
-            printf("\n");
+        if (verbosity >= 2) printf("Received 9 bytes\n");
+
+        if (parse_command(cmd_buf, &cmd) != 0) {
+            fprintf(stderr, "Error parsing command\n");
+            break;
         }
 
-        /* 27 raw XDPB bytes. Loop send for ESP compatibility. */
-        ssize_t sent = 0;
-        while (sent < 27) {
-            ssize_t n = send(client_socket, xdpb + sent, 27 - sent, 0);
-            if (n < 0) { perror("send geom"); goto done; }
-            sent += n;
-        }
-        goto done;
-    }
-
-    // Read sector from disk
-    if (cmd.ddCmd == 0x05) {
-        memset(sector_data, 0, sizeof(sector_data));
-        if (verbosity == 1) {
-            printf("\rRead:  Track %3d, Sector %2d, Head %d   ",
-                   cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
-            fflush(stdout);
-        } else if (verbosity >= 2) {
-            printf(" Read: Track %d, Sector %d, Head %d\n",
-                   cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+        if (verbosity >= 3) {
+            printf("Parsed command:\n");
+            printf("  %-11s 0x%02X\n", "ddCmd:",      cmd.ddCmd);
+            printf("  %-11s 0x%02X\n", "ddUnit:",     cmd.ddUnit);
+            printf("  %-11s %d\n",     "ddTrack:",    cmd.ddTrack);
+            printf("  %-11s %d\n",     "ddSide:",     cmd.ddSide);
+            printf("  %-11s %d\n",     "ddStartSec:", cmd.ddStartSec);
+            printf("  %-11s 0x%02X\n", "ddSize:",     cmd.ddSize);
+            printf("  %-11s %d\n",     "ddEndSec:",   cmd.ddEndSec);
+            printf("  %-11s 0x%02X\n", "ddGap:",      cmd.ddGap);
+            printf("  %-11s 0x%02X\n", "ddLen:",      cmd.ddLen);
+            printf("  %-11s %d\n",     "ddHead:",     cmd.ddHead);
         }
 
-        result = dsk_pread(driver, &geom, sector_data, cmd.ddTrack, cmd.ddHead, cmd.ddStartSec);
+        if (cmd.ddCmd == 0x07) {
+            // Geometry request
+            uint8_t xdpb[27];
+            size_t cap = (size_t)geom.dg_cylinders * geom.dg_heads
+                       * geom.dg_sectors * geom.dg_secsize;
 
-        if (result != DSK_ERR_OK) {
-            fprintf(stderr, "Error reading sector: %d\n", result);
-            close(client_socket);
-            return;
-        }
-
-        // Send 512 bytes of sector data back to client
-        // Use a loop to ensure all bytes are sent (ESP-12 compatibility)
-        while (total_sent < 512) {
-            ssize_t bytes_sent = send(client_socket, sector_data + total_sent, 512 - total_sent, 0);
-
-            if (bytes_sent < 0) {
-                perror("send failed");
-                goto done;
-                return;
+            if (build_xdpb(&geom, cap, dir_blocks_override, xdpb) != 0) {
+                fprintf(stderr, "build_xdpb failed for capacity %zu bytes\n", cap);
+                break;
             }
 
-            total_sent += bytes_sent;
+            if (verbosity >= 2) {
+                printf(" Geom:");
+                for (int i = 0; i < 27; i++) printf(" %02X", xdpb[i]);
+                printf("\n");
+            }
 
-            if (verbosity >= 3) {
-                printf("Sent %zd bytes (total: %zd/512)\n", bytes_sent, total_sent);
+            if (send_exact(client_socket, xdpb, 27) < 0) {
+                perror("send geom");
+                break;
             }
         }
-    }
-    else if (cmd.ddCmd == 0x06) {
-        size_t have = 0;
-
-        // The first recv() may have consumed some payload bytes past the
-        // 26-byte command header; carry them forward.
-        if (bytes_received > 9) {
-            size_t extra = bytes_received - 9;
-            if (extra > sizeof(sector_data)) extra = sizeof(sector_data);
-            memcpy(sector_data, recv_buffer + 9, extra);
-            have = extra;
-        }
-
-        // Pull the rest of the raw 512-byte sector payload off the socket.
-        while (have < sizeof(sector_data)) {
-            ssize_t n = recv(client_socket, sector_data + have,
-                             sizeof(sector_data) - have, 0);
-            if (n <= 0) {
-                perror("recv payload");
-                goto done;
+        else if (cmd.ddCmd == 0x05) {
+            // Read sector
+            memset(sector_data, 0, sizeof(sector_data));
+            if (verbosity == 1) {
+                printf("\rRead:  Track %3d, Sector %2d, Head %d   ",
+                       cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+                fflush(stdout);
+            } else if (verbosity >= 2) {
+                printf(" Read: Track %d, Sector %d, Head %d\n",
+                       cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
             }
-            have += n;
-        }
 
-        if (verbosity == 1) {
-            printf("\rWrite: Track %3d, Sector %2d, Head %d   ",
-                   cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
-            fflush(stdout);
-        } else if (verbosity >= 2) {
-            printf("Write: Track %d, Sector %d, Head %d\n",
-                   cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
-        }
+            result = dsk_pread(driver, &geom, sector_data,
+                               cmd.ddTrack, cmd.ddHead, cmd.ddStartSec);
+            if (result != DSK_ERR_OK) {
+                fprintf(stderr, "Error reading sector: %d\n", result);
+                /* Still send a (zeroed) 512-byte reply so the Spectrum doesn't
+                 * stall waiting for +IPD. Client decides how to react. */
+            }
 
-        result = dsk_pwrite(driver, &geom, sector_data,
-                            cmd.ddTrack, cmd.ddHead, cmd.ddStartSec);
-        if (result != DSK_ERR_OK) {
-            fprintf(stderr, "dsk_pwrite failed: %d\n", result);
+            if (send_exact(client_socket, sector_data, 512) < 0) {
+                perror("send sector");
+                break;
+            }
         }
-        /* No reply payload: fall through to shutdown+close in `done:` */
+        else if (cmd.ddCmd == 0x06) {
+            // Write sector: pull the 512-byte payload, write it, send 1-byte ACK
+            if (recv_exact(client_socket, sector_data, 512) < 0) {
+                perror("recv write payload");
+                break;
+            }
+
+            if (verbosity == 1) {
+                printf("\rWrite: Track %3d, Sector %2d, Head %d   ",
+                       cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+                fflush(stdout);
+            } else if (verbosity >= 2) {
+                printf("Write: Track %d, Sector %d, Head %d\n",
+                       cmd.ddTrack, cmd.ddStartSec, cmd.ddHead);
+            }
+
+            result = dsk_pwrite(driver, &geom, sector_data,
+                                cmd.ddTrack, cmd.ddHead, cmd.ddStartSec);
+            uint8_t ack = (result == DSK_ERR_OK) ? 0x00 : 0x01;
+            if (result != DSK_ERR_OK) {
+                fprintf(stderr, "dsk_pwrite failed: %d\n", result);
+            }
+
+            if (send_exact(client_socket, &ack, 1) < 0) {
+                perror("send ack");
+                break;
+            }
+        }
+        else {
+            fprintf(stderr, "Unknown command 0x%02X - closing\n", cmd.ddCmd);
+            break;
+        }
     }
 
-done:
-    // Shutdown the write side to signal we're done sending
-    shutdown(client_socket, SHUT_WR);
-    usleep(200000); // 200ms delay for ESP before closing
     close(client_socket);
 }
 
@@ -443,7 +426,6 @@ int start_server(void) {
         }
 
         handle_client(client_socket);
-        usleep(50000);
     }
 
     close(server_socket);
